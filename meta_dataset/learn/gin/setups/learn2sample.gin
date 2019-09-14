@@ -2,7 +2,7 @@ import meta_dataset.data.config
 
 # Default values for sampling variable shots / ways.
 EpisodeDescriptionConfig.min_ways = 5
-EpisodeDescriptionConfig.max_ways_upper_bound = 50
+EpisodeDescriptionConfig.max_ways_upper_bound = 20
 EpisodeDescriptionConfig.max_num_query = 10
 # EpisodeDescriptionConfig.max_support_set_size = 500
 EpisodeDescriptionConfig.max_support_set_size = 50

@@ -60,7 +60,7 @@ class EncoderClass(nn.Module):
     return x
 
 
-class Sampler(nn.Module):
+class MaskGenerator(nn.Module):
   def __init__(self):
     super(Sampler, self).__init__()
     self.gru = nn.GRUCell(32, 32)
@@ -101,3 +101,17 @@ class Sampler(nn.Module):
     x = RelaxedBernoulli(1.0, x).sample()
     x = x.view(-1, *([1]*4))  # [n_cls , 1, 1, 1, 1]
     return x
+
+
+class Sampler(nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.enc_ins = EncoderInstance()
+    self.enc_cls = EncoderClass()
+    self.mask_gen = MaskGenerator()
+
+  def sgd_step(self, loss, lr, second_order=False):
+    # names, params = list(zip(named_params))
+    grads = torch.autograd.grad(loss, self.parameters())
+    for param, grad in zip(self.parameters(), grads):
+      param.requires_grad_(False).copy_(param - lr * grad)

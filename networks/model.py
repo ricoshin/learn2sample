@@ -30,25 +30,39 @@ class Model(nn.Module):
       layers.append(nn.MaxPool2d(2, 2))
     return layers
 
-  @classmethod
-  def get_init(cls):
+  def get_init(cls, cuda=True):
     """Build a minimum volatile model(without the final layer)
     just for getting initial parameters."""
-    return cls(n_classes=None).named_parameters()
+    model = cls(n_classes=None)
+    if cuda:
+      model = model.cuda()
+    return model.named_parameters()
+
+  def get_params(self):
+    return self.named_parameters()
 
   def init_with(self, params):
     """Initialize the model parameters by matching the names."""
-    p_src = {name: param for name, param in params]}
+    p_src = {name: param for name, param in params}
     for name, p_tar in self.named_parameters():
       if name in p_src.keys():
-        p_tar.data = p_src[name].clone()
+        p_tar.copy_(p_src[name].clone())
+        # p_tar = p_src[name].clone()
+    return self
 
-  @staticmethod
-  def compute_grad(loss, params, second_order=False):
-    params = [for param in name, param in params]
-    return torch.autograd.grad(loss, params, create_graph=second_order)
+  # @staticmethod
+  # def grad(loss, params, second_order=False):
+  #   params = [for param in name, param in params]
+  #   return torch.autograd.grad(loss, params, create_graph=second_order)
 
-  def forward(self, dataset, mask=None, detach_params=False):
+  def sgd_step(self, loss, lr, second_order=False):
+    # names, params = list(zip(named_params))
+    grads = torch.autograd.grad(
+      loss, self.parameters(), create_graph=second_order)
+    for param, grad in zip(self.parameters(), grads):
+      param.requires_grad_(False).copy_(param - lr * grad)
+
+  def forward(self, dataset, mask=None):
     """
     Args:
       dataset (loader.Dataset):
@@ -81,9 +95,10 @@ class Model(nn.Module):
 
     x = F.log_softmax(self.classifier(x))
     loss = self.nll_loss(x.squeeze(), y)
+    acc = (x.argmax(dim=1) == y).float().mean()
 
-    if detach_params:
-      loss = loss.detach()
+    # if detach_params:
+      # loss = loss.detach()
 
     if mask is not None:
       # to match dimension
@@ -93,6 +108,5 @@ class Model(nn.Module):
       loss = (loss * mask).sum() / (mask.sum() * n_samples)
     else:
       loss = loss.sum()
-    acc = (x.argmax(dim=1) == y).float().mean()
 
     return loss, acc
