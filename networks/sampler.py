@@ -101,7 +101,7 @@ class MaskGenerator(nn.Module):
     """
     self.state = self.gru(x, self.state)  # [n_cls , rnn_h_dim]
     x = self.linear(self.state)  # [n_cls , 1]
-    x = RelaxedBernoulli(2.0, x).sample()
+    x = RelaxedBernoulli(0.5, x).sample()
     x = x.view(-1, *([1]*4))  # [n_cls , 1, 1, 1, 1]
     return x
 

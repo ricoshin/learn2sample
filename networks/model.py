@@ -23,8 +23,8 @@ class Params(nn.Module):
     for k in self._dict.keys():
       self._dict[k].detach_().requires_grad_(True)
 
-  def sgd_step(
-    self, loss, lr, detach_p=False, detach_g=False, second_order=False):
+  def sgd_step(self, loss, lr, detach_p=False, detach_g=False,
+               second_order=False):
     params = self._dict
     if detach_p is True and detach_g is True:
       raise Exception('parameters and gradients should not be detached both.')
@@ -39,25 +39,6 @@ class Params(nn.Module):
         grad = grad.detach()
       new_params[name] = param - lr * grad
     return Params(new_params)
-
-  # def sgd_step(self, loss, params, lr, second_order=False):
-  #   # names, params = list(zip(named_params))
-  #   grads = torch.autograd.grad(
-  #     loss, self._params.values(), create_graph=second_order)
-  #
-  #   # params = [p for p in self.parameters()]
-  #   # grads = [g for g in grads]
-  #   # import pdb; pdb.set_trace()
-  #   # for i in range(len(params)):
-  #   #   params[i] = params[i].detach() - lr * grads[i]
-  #   # import pdb; pdb.set_trace()
-  #   return {name: param - lr * grad for (name, param), grad in zip(
-  #     self._params.items(), grads)}
-  #   # for param, grad in zip(self._params.values(), grads):
-  #   #   if param.is_leaf:
-  #   #     # leaf node that requires grad can not be changed.
-  #   #     param.requires_grad_(False)
-  #   #   param.copy_(param.detach() - lr * grad)
 
 
 class Model(nn.Module):
@@ -96,7 +77,7 @@ class Model(nn.Module):
     x = F.conv2d(x, p[f'last_conv.weight'], p[f'last_conv.bias'], 3)
     return x
 
-  def forward(self, dataset, params, mask=None):
+  def forward(self, dataset, params, mask=None, debug=False):
     """
     Args:
       dataset (loader.Dataset):
@@ -127,22 +108,28 @@ class Model(nn.Module):
 
     # funtional forward
     x = self._forward(x, params)  # [n_cls*n_ins, n_cls, 1, 1]
+    if debug:
+      import pdb; pdb.set_trace()
 
     # loss and accuracy
     x = F.log_softmax(x.squeeze(), dim=1)  # [n_cls*n_ins, n_cls]
-    # import pdb; pdb.set_trace()
     loss = self.nll_loss(x, y)  # [n_cls*n_ins]
-    acc = (x.argmax(dim=1) == y).float().mean()
+    acc = (x.argmax(dim=1) == y).float()
+    loss_m = loss.mean()
+    acc_m = acc.mean()
 
-    # loss = loss.detach()
-
-    if mask is not None:
-      # to match dimension
-      loss = view_classwise(loss)  # [n_cls, n_ins]
-      mask = mask.squeeze().unsqueeze(1)  # [n_cls, 1]
-      # weighted loss by sampler mask
-      loss = (loss * mask).sum() / (mask.sum() * self.n_classes)
+    if mask is None:
+      return loss_m, acc_m
+    # weighted average by mask
     else:
-      loss = loss.mean()
-
-    return loss, acc
+      # to match dimension
+      mask = mask.squeeze().unsqueeze(1).repeat([1, n_samples])  # [n_cls, 1]
+      loss = view_classwise(loss) * mask # [n_cls, n_ins]
+      acc = view_classwise(acc) * mask
+      # simple average
+      loss_m = loss.mean()
+      acc_m = acc.mean()
+      # weighted loss by sampler mask
+      loss_w = (loss * mask).sum() / mask.sum()
+      acc_w = (acc * mask).sum() / mask.sum()
+      return loss_m, acc_m, loss_w, acc_w

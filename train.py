@@ -1,35 +1,38 @@
+import numpy as np
 import torch
+from utils import utils
 from loader import MetaDataset, PseudoMetaDataset
-from networks.sampler import EncoderInstance, EncoderClass, Sampler
 from networks.model import Model
+from networks.sampler import EncoderClass, EncoderInstance, Sampler
 
-if __name__ == '__main__':
+C = utils.getCudaManager('default')
+sig_1 = utils.getSignalCatcher('SIGINT')
+sig_2 = utils.getSignalCatcher('SIGTSTP')
+
+def loop(train=True):
 
   metadata = MetaDataset(split='train')
   # metadata = PseudoMetaDataset()
 
-
-  # init_model = Model().cuda()
-  # init_params = init_model.get_params()
   outer_steps = 1000
-  inner_steps = 1000
+  inner_steps = 500
   unroll_steps = 3
-  log_step = 5
   inner_lr = 0.1
   outer_lr = 0.05
 
-  sampler = Sampler().cuda()
+  sampler = C(Sampler())
   sampler.train()
   outer_optim = torch.optim.SGD(sampler.parameters(), lr=outer_lr)
-
 
   for i in range(outer_steps):
     outer_loss = 0
 
-
     for j, epi in enumerate(metadata.loader(n_batches=1)):
-      epi.s = epi.s.cuda()
-      epi.q = epi.q.cuda()
+      try:
+        epi.s = C(epi.s)
+        epi.q = C(epi.q)
+      except:  # OOM
+        continue
       view_classwise = epi.s.get_view_classwise_fn()
       # view_elementwise = epi.s.get_view_elementwise_fn()
 
@@ -39,36 +42,45 @@ if __name__ == '__main__':
 
       sampler.mask_gen.initialze(epi.n_classes)
       model = Model(epi.n_classes)
-      params = model.get_init_params().cuda()
+      params = C(model.get_init_params())
       # import pdb; pdb.set_trace()
 
       for j in range(inner_steps):
+        debug_1 = sig_1.is_active()
+        debug_2 = sig_2.is_active()
+
         mask = sampler.mask_gen(xs)  # class mask
-        # xs = view_classwise(epi.s.imgs)  # entire support set
-        # xs = xs * m  # masking operation
-        # xs = view_elementwise(xs)
-        inner_loss_s, acc_s = model(epi.s, params, mask)
-        # import pdb; pdb.set_trace()
-        try:
-          params = params.sgd_step(
-            inner_loss_s, inner_lr, second_order=True)
-        except:
+        loss_s_m, acc_s_m, loss_s_w, acc_s_w = model(
+          epi.s, params, mask, debug_1)
+
+        if debug_2:
           import pdb; pdb.set_trace()
 
+        params = params.sgd_step(
+          loss_s_w, inner_lr, second_order=True)
 
-        if (j + 1) % unroll_steps == 0:
-          inner_loss_q, acc_q = model(epi.q, params)  # without mask
-          outer_loss += inner_loss_q
+        if train and (j + 1) % unroll_steps == 0:
+          loss_q_m, acc_q_m = model(epi.q, params, mask=None)
+          outer_loss += loss_q_m
           print(
-            f'[iteration {j:4d}] '
-            f'loss_s:{inner_loss_s.tolist():3.4f}|acc_s:{acc_s.tolist():3.4f}|'
-            f'loss_q:{inner_loss_q.tolist():3.4f}|acc_q:{acc_q.tolist():3.4f}'
+            f'[outer:{i:4d}/{outer_steps}|inner:{j:4d}/{inner_steps}]'
+            f'ways:{(mask > 0.5).squeeze().sum().tolist()}/{epi.n_classes:2d}|'
+            f'S/Q:{epi.s.n_samples:2d}/{epi.q.n_samples:2d}|'
+            f'loss_s:{loss_s_m.tolist():6.3f}({loss_s_w.tolist():6.3f})|'
+            f'acc_s:{acc_s_m.tolist():6.3f}({acc_s_w.tolist():6.3f})|'
+            f'loss_q:{loss_q_m.tolist():6.3f}/{np.log(epi.n_classes):6.3f}|'
+            f'acc_q:{acc_q_m.tolist():6.3f}/100.0'
           )
-
           sampler.zero_grad()
           outer_loss.backward()
           outer_optim.step()
           outer_loss = 0
           params.detach_()
           sampler.mask_gen.detach_()
-          # import pdb; pdb.set_trace()
+  import pdb; pdb.set_trace()
+  print('end_of_loop')
+
+# def meta_train
+
+if __name__ == '__main__':
+  loop(train=True)
