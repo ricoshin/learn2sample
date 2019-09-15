@@ -62,7 +62,7 @@ class EncoderClass(nn.Module):
 
 class MaskGenerator(nn.Module):
   def __init__(self):
-    super(Sampler, self).__init__()
+    super(MaskGenerator, self).__init__()
     self.gru = nn.GRUCell(32, 32)
     self.linear = nn.Linear(32, 1)
     self._state_init = nn.Parameter(torch.randn(1, 32))
@@ -75,6 +75,9 @@ class MaskGenerator(nn.Module):
         "Run Sampler.initialize() before feeding the first data.")
     else:
       return self._state
+
+  def detach_(self):
+    self._state.detach_()
 
   @state.setter
   def state(self, value):
@@ -98,20 +101,21 @@ class MaskGenerator(nn.Module):
     """
     self.state = self.gru(x, self.state)  # [n_cls , rnn_h_dim]
     x = self.linear(self.state)  # [n_cls , 1]
-    x = RelaxedBernoulli(1.0, x).sample()
+    x = RelaxedBernoulli(2.0, x).sample()
     x = x.view(-1, *([1]*4))  # [n_cls , 1, 1, 1, 1]
     return x
 
 
 class Sampler(nn.Module):
   def __init__(self):
-    super().__init__()
+    super(Sampler, self).__init__()
     self.enc_ins = EncoderInstance()
     self.enc_cls = EncoderClass()
     self.mask_gen = MaskGenerator()
 
-  def sgd_step(self, loss, lr, second_order=False):
-    # names, params = list(zip(named_params))
-    grads = torch.autograd.grad(loss, self.parameters())
-    for param, grad in zip(self.parameters(), grads):
-      param.requires_grad_(False).copy_(param - lr * grad)
+
+  # def sgd_step(self, loss, lr, second_order=False):
+  #   # names, params = list(zip(named_params))
+  #   grads = torch.autograd.grad(loss, self.parameters())
+  #   for param, grad in zip(self.parameters(), grads):
+  #     param.requires_grad_(False).copy_(param - lr * grad)

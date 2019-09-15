@@ -13,7 +13,8 @@ from meta_dataset.data import config
 from meta_dataset.data import dataset_spec as dataset_spec_lib
 from meta_dataset.data import learning_spec, pipeline
 
-BASE_PATH = '/v14/records'
+# BASE_PATH = '/v14/records'  # SSD
+BASE_PATH = '/st1/dataset/meta-dataset/records'  # HDD
 GIN_FILE_PATH = 'meta_dataset/learn/gin/setups/learn2sample.gin'
 gin.parse_config_file(GIN_FILE_PATH)
 tf.enable_eager_execution()
@@ -58,7 +59,7 @@ class Dataset(object):
   def cuda(self):
     self.imgs = self.imgs.cuda()
     self.labels = self.labels.cuda()
-    self.ids = self.ids.cuda()
+    # self.ids = self.ids.cuda()  # useless for now
     return self
 
   def numpy(self):

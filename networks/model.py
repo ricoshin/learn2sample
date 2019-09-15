@@ -1,68 +1,102 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from utils.torchviz import make_dot
 
-class Model(nn.Module):
-  def __init__(self, n_classes=None):
-    super(Model, self).__init__()
-    ch = [3, 100, 150, 200, 250]
-    kn = [5, 5, 3, 3]
-    self.layers = self._stack_layers(ch, kn)
-    self.n_classes = n_classes
-    if self.n_classes is not None:
-      self.classifier = nn.Conv2d(ch[-1], self.n_classes, 3)
-    self.nll_loss = nn.NLLLoss(reduction='none')
 
-  def _stack_layers(self, ch, kn):
-    """
-    Args:
-      ch(list): number of channels.
-      kn(list): size of kernels.
-      n_classes(int): number of classes.
-    Returns:
-      layers(nn.Module)
-    """
-    layers = nn.ModuleList()
-    for i in range(len(ch) - 1):
-      layers.append(nn.Conv2d(ch[i], ch[i + 1], kn[i]))
-      layers.append(nn.BatchNorm2d(ch[i + 1]))
-      layers.append(nn.ReLU(True))
-      layers.append(nn.MaxPool2d(2, 2))
-    return layers
+class Params(nn.Module):
+  def __init__(self, params_dict):
+    super(Params, self).__init__()
+    assert isinstance(params_dict, dict)
+    self._dict = params_dict
 
-  def get_init(cls, cuda=True):
-    """Build a minimum volatile model(without the final layer)
-    just for getting initial parameters."""
-    model = cls(n_classes=None)
-    if cuda:
-      model = model.cuda()
-    return model.named_parameters()
+  @classmethod
+  def from_module(cls, module):
+    assert isinstance(module, nn.Module)
+    return cls({k: v for k, v in module.named_parameters()})
 
-  def get_params(self):
-    return self.named_parameters()
-
-  def init_with(self, params):
-    """Initialize the model parameters by matching the names."""
-    p_src = {name: param for name, param in params}
-    for name, p_tar in self.named_parameters():
-      if name in p_src.keys():
-        p_tar.copy_(p_src[name].clone())
-        # p_tar = p_src[name].clone()
+  def cuda(self):
+    self._dict = {k: v.cuda() for k, v in self._dict.items()}
     return self
 
-  # @staticmethod
-  # def grad(loss, params, second_order=False):
-  #   params = [for param in name, param in params]
-  #   return torch.autograd.grad(loss, params, create_graph=second_order)
+  def detach_(self):
+    for k in self._dict.keys():
+      self._dict[k].detach_().requires_grad_(True)
 
-  def sgd_step(self, loss, lr, second_order=False):
-    # names, params = list(zip(named_params))
+  def sgd_step(
+    self, loss, lr, detach_p=False, detach_g=False, second_order=False):
+    params = self._dict
+    if detach_p is True and detach_g is True:
+      raise Exception('parameters and gradients should not be detached both.')
+    create_graph = not detach_g and second_order
     grads = torch.autograd.grad(
-      loss, self.parameters(), create_graph=second_order)
-    for param, grad in zip(self.parameters(), grads):
-      param.requires_grad_(False).copy_(param - lr * grad)
+      loss, params.values(), create_graph=create_graph)
+    new_params = {}
+    for (name, param), grad in zip(params.items(), grads):
+      if detach_p:
+        param = param.detach()
+      if detach_g:
+        grad = grad.detach()
+      new_params[name] = param - lr * grad
+    return Params(new_params)
 
-  def forward(self, dataset, mask=None):
+  # def sgd_step(self, loss, params, lr, second_order=False):
+  #   # names, params = list(zip(named_params))
+  #   grads = torch.autograd.grad(
+  #     loss, self._params.values(), create_graph=second_order)
+  #
+  #   # params = [p for p in self.parameters()]
+  #   # grads = [g for g in grads]
+  #   # import pdb; pdb.set_trace()
+  #   # for i in range(len(params)):
+  #   #   params[i] = params[i].detach() - lr * grads[i]
+  #   # import pdb; pdb.set_trace()
+  #   return {name: param - lr * grad for (name, param), grad in zip(
+  #     self._params.items(), grads)}
+  #   # for param, grad in zip(self._params.values(), grads):
+  #   #   if param.is_leaf:
+  #   #     # leaf node that requires grad can not be changed.
+  #   #     param.requires_grad_(False)
+  #   #   param.copy_(param.detach() - lr * grad)
+
+
+class Model(nn.Module):
+  def __init__(self, n_classes):
+    super(Model, self).__init__()
+    self.ch = [3, 100, 150, 200, 250]
+    self.kn = [5, 5, 3, 3]
+    self.n_classes = n_classes
+    self.nll_loss = nn.NLLLoss(reduction='none')
+    # if self.n_classes is not None:
+      # self.classifier = nn.Conv2d(ch[-1], self.n_classes, 3)
+
+  def get_init_params(self):
+    layers = nn.ModuleDict()
+    for i in range(len(self.ch) - 1):
+      layers.update([
+        [f'conv_{i}', nn.Conv2d(self.ch[i], self.ch[i + 1], self.kn[i])],
+        [f'bn_{i}', nn.BatchNorm2d(self.ch[i + 1], track_running_stats=False)],
+        [f'relu_{i}', nn.ReLU(inplace=True)],
+        [f'mp_{i}', nn.MaxPool2d(2, 2)],
+      ])
+    layers.update({f'last_conv': nn.Conv2d(self.ch[-1], self.n_classes, 3)})
+    return Params.from_module(layers)
+
+  def _forward(self, x, p):
+    assert isinstance(p, Params)
+    p = p._dict
+    for i in range(len(self.ch) - 1):
+      x = F.conv2d(x, p[f'conv_{i}.weight'], p[f'conv_{i}.bias'])
+      x = F.batch_norm(
+          x, running_mean=None, running_var=None, training=True,
+          weight=p[f'bn_{i}.weight'], bias=p[f'bn_{i}.bias'],
+        )
+      x = F.relu(x, inplace=True)
+      x = F.max_pool2d(x, 2, 2)
+    x = F.conv2d(x, p[f'last_conv.weight'], p[f'last_conv.bias'], 3)
+    return x
+
+  def forward(self, dataset, params, mask=None):
     """
     Args:
       dataset (loader.Dataset):
@@ -80,33 +114,35 @@ class Model(nn.Module):
       loss (torch.FloatTensor): cross entropy loss.
       acc (torch.FloatTensor): accuracy of classification.
     """
+    assert isinstance(params, Params)
     if self.n_classes is None:
       raise RuntimeError(
         'forward() with Model.n_class=None is only meant to be called in '
         'get_init_parameters() just for getting initial parameters.')
 
-    x = dataset.imgs
-    y = dataset.labels
-    n_samples = dataset.n_samples
+    x = dataset.imgs  # [n_cls*n_ins, 3, 84, 84]
+    y = dataset.labels  # [n_cls*n_ins]
+    n_samples = dataset.n_samples  # n_ins
     view_classwise = dataset.get_view_classwise_fn()
 
-    for layer in self.layers:
-      x = layer(x)
+    # funtional forward
+    x = self._forward(x, params)  # [n_cls*n_ins, n_cls, 1, 1]
 
-    x = F.log_softmax(self.classifier(x))
-    loss = self.nll_loss(x.squeeze(), y)
+    # loss and accuracy
+    x = F.log_softmax(x.squeeze(), dim=1)  # [n_cls*n_ins, n_cls]
+    # import pdb; pdb.set_trace()
+    loss = self.nll_loss(x, y)  # [n_cls*n_ins]
     acc = (x.argmax(dim=1) == y).float().mean()
 
-    # if detach_params:
-      # loss = loss.detach()
+    # loss = loss.detach()
 
     if mask is not None:
       # to match dimension
-      loss = view_classwise(loss)
-      mask = mask.squeeze().unsqueeze(1)
+      loss = view_classwise(loss)  # [n_cls, n_ins]
+      mask = mask.squeeze().unsqueeze(1)  # [n_cls, 1]
       # weighted loss by sampler mask
-      loss = (loss * mask).sum() / (mask.sum() * n_samples)
+      loss = (loss * mask).sum() / (mask.sum() * self.n_classes)
     else:
-      loss = loss.sum()
+      loss = loss.mean()
 
     return loss, acc
