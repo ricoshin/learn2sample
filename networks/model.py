@@ -19,9 +19,17 @@ class Params(nn.Module):
     self._dict = {k: v.cuda() for k, v in self._dict.items()}
     return self
 
+  def clone(self):
+    dict_ = {k: v.clone() for k, v in self._dict.items()}
+    return Params(dict_)
+
   def detach_(self):
     for k in self._dict.keys():
       self._dict[k].detach_().requires_grad_(True)
+
+  def detach(self):
+    dict_ = {k: v.detach().requires_grad_(True) for k, v in self._dict.items()}
+    return Params(dict_)
 
   def sgd_step(self, loss, lr, detach_p=False, detach_g=False,
                second_order=False):
@@ -85,7 +93,7 @@ class Model(nn.Module):
       mask (torch.FloatTensor):
         Classwise weighting overlay mask.
         Controls the effects from each classes.
-        torch.Size([n_cls*n_ins, 1, 1, 1, 1])
+        torch.Size([n_cls*n_ins, 1])
       detach_params (bool):
         This flag can be used to prevent from computing second derivative of
         model parameters, while stil keeping those piplelines open heading to
@@ -115,21 +123,16 @@ class Model(nn.Module):
     x = F.log_softmax(x.squeeze(), dim=1)  # [n_cls*n_ins, n_cls]
     loss = self.nll_loss(x, y)  # [n_cls*n_ins]
     acc = (x.argmax(dim=1) == y).float()
-    loss_m = loss.mean()
-    acc_m = acc.mean()
 
     if mask is None:
-      return loss_m, acc_m
+      return loss.mean(), acc.mean()
     # weighted average by mask
     else:
       # to match dimension
-      mask = mask.squeeze().unsqueeze(1).repeat([1, n_samples])  # [n_cls, 1]
+      mask = mask.repeat([1, n_samples])  # [n_cls, 1]
       loss = view_classwise(loss) * mask # [n_cls, n_ins]
       acc = view_classwise(acc) * mask
-      # simple average
-      loss_m = loss.mean()
-      acc_m = acc.mean()
       # weighted loss by sampler mask
-      loss_w = (loss * mask).sum() / mask.sum()
-      acc_w = (acc * mask).sum() / mask.sum()
-      return loss_m, acc_m, loss_w, acc_w
+      loss_w = (loss * mask).sum() / mask.sum().detach()
+      acc_w = (acc * mask).sum() / mask.sum().detach()
+      return loss, acc, loss_w, acc_w

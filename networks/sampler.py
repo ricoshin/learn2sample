@@ -39,7 +39,7 @@ class EncoderClass(nn.Module):
   def __init__(self):
     super(EncoderClass, self).__init__()
     self.relu = nn.ReLU(True)
-    self.bn = nn.BatchNorm1d(32, affine=True)
+    self.bn = nn.BatchNorm1d(32, affine=False)
 
   def forward(self, x):
     """
@@ -63,47 +63,65 @@ class EncoderClass(nn.Module):
 class MaskGenerator(nn.Module):
   def __init__(self):
     super(MaskGenerator, self).__init__()
-    self.gru = nn.GRUCell(32, 32)
-    self.linear = nn.Linear(32, 1)
-    self._state_init = nn.Parameter(torch.randn(1, 32))
-    self._state = None
+    self.state_linear = nn.Linear(32, 32)
+    self.gru = nn.GRUCell(34, 32)  # 2 more dimensions for mask and loss
+    self.out_linear = nn.Linear(32, 1)  # 1 more dimension for learning rate
+    self.relu = nn.ReLU(inplace=True)
+    self.sigmoid = nn.Sigmoid()
+    # self._state_init = nn.Parameter(torch.randn(1, 32))
+    self.state = None
 
-  @property
-  def state(self):
-    if self._state is None:
-      raise RuntimeError("Sampler has never been initialized. "
-        "Run Sampler.initialize() before feeding the first data.")
-    else:
-      return self._state
+  # @property
+  # def state(self):
+  #   if self._state is None:
+  #     raise RuntimeError("Sampler has never been initialized. "
+  #       "Run Sampler.initialize() before feeding the first data.")
+  #   else:
+  #     return self._state
+
+  # @state.setter
+  # def state(self, value):
+  #   # TO DO: check type, dimension
+  #   self._state = value
+
+  # def init_state(self, n_batches):
+  #   return self._state_init.repeat([n_batches, 1])
 
   def detach_(self):
-    self._state.detach_()
+    self.state.detach_()
 
-  @state.setter
-  def state(self, value):
-    # TO DO: check type, dimension
-    self._state = value
+  def init_mask(self, n_batches):
+    return torch.zeros(n_batches, 1)
 
-  def initialze(self, n_batches):
-    self._state = self._state_init.repeat([n_batches, 1])
+  def init_loss(self, n_batches):
+    return self.init_mask(n_batches)
 
-  def forward(self, x):
+  def forward(self, x, mask, loss):
     """
     Args:
       x (torch.FloatTensor):
         class-wise representation.
         torch.Size([n_cls, feature_dim])
+      mask: torch.Size([n_cls, 1])
+      loss: torch.Size([n_cls, 1])
     Returns:
       x (torch.FloatTensor):
         class-wise mask layout.
-        torch.Size([n_cls, 1, 1, 1, 1])
+        torch.Size([n_cls, 1])
 
     """
-    self.state = self.gru(x, self.state)  # [n_cls , rnn_h_dim]
-    x = self.linear(self.state)  # [n_cls , 1]
-    x = RelaxedBernoulli(0.5, x).sample()
-    x = x.view(-1, *([1]*4))  # [n_cls , 1, 1, 1, 1]
-    return x
+    mask = mask.detach()
+    loss = loss.mean(dim=1, keepdim=True).detach()
+    if self.state is None:
+      state = self.state_linear(x.detach())
+    else:
+      state = self.state
+    x = torch.cat([x, mask, loss], dim=1)  # [n_cls , feature_dim + 2]
+    self.state = self.gru(x, state)  # [n_cls , rnn_h_dim]
+    x = self.out_linear(state)  # [n_cls , 1]
+    # p = RelaxedBernoulli(0.5, p).rsample()
+    x = self.sigmoid(5*x)
+    return x  # [n_cls , 1]
 
 
 class Sampler(nn.Module):
@@ -112,6 +130,9 @@ class Sampler(nn.Module):
     self.enc_ins = EncoderInstance()
     self.enc_cls = EncoderClass()
     self.mask_gen = MaskGenerator()
+
+  def detach_(self):
+    self.mask_gen.detach_()
 
 
   # def sgd_step(self, loss, lr, second_order=False):

@@ -237,7 +237,7 @@ class MetaDataset(object):
     # Fixed way / support / query
     # (single dataset without ontology)
     NUM_WAYS = None
-    NUM_SUPPORT = 15
+    NUM_SUPPORT = 5
     NUM_QUERY = 5
 
     # Episode description config
