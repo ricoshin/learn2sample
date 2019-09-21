@@ -207,15 +207,17 @@ class Episode(object):
       plt.show()
 
 
+@gin.configurable
 class MetaDataset(object):
   def __init__(self, split):
-    assert split in ['train', 'test']
+    assert split in ['train', 'valid', 'test']
     split = getattr(learning_spec.Split, split.upper())
 
     # Reading datasets
     # self.datasets = ['aircraft', 'cu_birds', 'dtd', 'fungi', 'ilsvrc_2012',
     # 'omniglot', 'quickdraw', 'vgg_flower']
-    self.datasets = ['omniglot']
+    # self.datasets = ['omniglot']
+    self.datasets = ['ilsvrc_2012']
 
     # Ontology setting
     use_bilevel_ontology_list = [False] * len(self.datasets)
@@ -226,7 +228,7 @@ class MetaDataset(object):
     # use_dag_ontology_list[4] = True
 
     # Omniglot only
-    use_bilevel_ontology_list[0] = True
+    # use_bilevel_ontology_list[0] = True
 
     all_dataset_specs = []
     for dataset_name in self.datasets:
@@ -238,7 +240,7 @@ class MetaDataset(object):
     # (single dataset without ontology)
     NUM_WAYS = None
     NUM_SUPPORT = 5
-    NUM_QUERY = 5
+    NUM_QUERY = 15
 
     # Episode description config
     self.episode_config = config.EpisodeDescriptionConfig(

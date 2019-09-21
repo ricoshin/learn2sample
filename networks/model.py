@@ -128,11 +128,9 @@ class Model(nn.Module):
       return loss.mean(), acc.mean()
     # weighted average by mask
     else:
-      # to match dimension
-      mask = mask.repeat([1, n_samples])  # [n_cls, 1]
-      loss = view_classwise(loss) * mask # [n_cls, n_ins]
-      acc = view_classwise(acc) * mask
-      # weighted loss by sampler mask
-      loss_w = (loss * mask).sum() / mask.sum().detach()
-      acc_w = (acc * mask).sum() / mask.sum().detach()
+      loss = view_classwise(loss).mean(1, keepdim=True)
+      acc = view_classwise(acc).mean(1, keepdim=True)
+      mask_sum = mask.sum().detach()
+      loss_w = (loss * mask).sum() / mask_sum
+      acc_w = (acc * mask).sum() / mask_sum
       return loss, acc, loss_w, acc_w

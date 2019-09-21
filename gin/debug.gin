@@ -1,0 +1,42 @@
+## meta_train configuration
+
+# scopes
+meta_train.train_loop = @train/loop
+meta_train.valid_loop = @valid/loop
+meta_train.test_loop = @test/loop
+
+# args
+meta_train.meta_epoch = 3
+meta_train.tolerance = 1
+
+
+## loop configuration
+
+# outer/inner steps
+loop.inner_lr = 1.0
+loop.inner_steps = 2
+train/loop.outer_steps = 2
+valid/loop.outer_steps = 2
+test/loop.outer_steps = 2
+
+# only for meta-training
+train/loop.outer_lr = 0.001
+train/loop.outer_optim = "adam"
+train/loop.unroll_steps = 2
+train/loop.meta_batchsize = 0
+
+# mask gernerator
+MaskGenerator.input_more = True
+MaskGenerator.output_more = False
+MaskGenerator.sample_mode = False
+MaskGenerator.temp = 0.2
+
+# log steps
+train/loop.log_steps = 1
+valid/loop.log_steps = 1
+test/loop.log_steps = 1
+
+# modes
+train/loop.mode = "train"
+valid/loop.mode = "valid"
+test/loop.mode = "test"

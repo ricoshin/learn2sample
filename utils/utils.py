@@ -1,7 +1,9 @@
 import logging
 import os
+import shutil
 import signal
 import time
+from datetime import datetime
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -11,7 +13,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 from tensorboardX import SummaryWriter
-import seaborn as sns
+
 _tensor_managers = {}
 _cuda_managers = {}
 
@@ -34,7 +36,7 @@ def getSignalCatcher(name):
 
 class TruncationManager(object):
   def __init__(self, init_trunc_len=10, patience=10, warmup=10,
-    min=10, max=500, decaying_rate=0.9, inc=10):
+               min=10, max=500, decaying_rate=0.9, inc=10):
     self._init_trunc_len = init_trunc_len
     self._trunc_len = init_trunc_len
     self._decaying_rate = decaying_rate
@@ -79,7 +81,6 @@ class TruncationManager(object):
         self._trunc_len += 5
         self._bad_loss = 0
         print(f'\n\n\ntruncation: {self.len}')
-
 
   def update_loss_list(self, losses):
     assert isinstance(losses, (list, tuple))
@@ -152,7 +153,7 @@ class CUDAManager(object):
 
   def set_cuda(self, cuda):
     self.cuda = cuda
-    print(f"Global cuda manager '{self.name}' is set to {self.cuda}")
+    print(f"Global cuda manager '{self.name}' is set to {self.cuda}.")
     return self
 
   def __call__(self, obj):
@@ -220,40 +221,16 @@ def set_logger(cfg):
   logger.addHandler(stream_handler)
 
 
-def prepare_dir(problem, result_dir, save_dir, post_digits=3):
-  """result_dir is super dir that save_dir will be placed under.
-    Unless specified, dir name will be 'problem_mmdd_(serial number).'
-  """
-  if result_dir is None:
-    return None
-
-  if save_dir:
-    dir = os.path.join(result_dir, save_dir)
-    if not os.path.exists(dir):
-      os.makedirs(dir)
-      print(f'Make new dir for ouputting params and result: {dir}')
-    else:
-      print(f'Overwrite existing dir: {dir}')
-    return dir
-
-  def _make_unique_dir(dir):
-    if os.path.exists(dir):
-      if len(os.listdir(dir)) > 0:
-        dir = dir.split('_')
-        n = int(dir.pop()) + 1
-        dir = '_'.join([*dir, str(n).zfill(post_digits)])
-        dir = _make_unique_dir(dir)
-      else:
-        print(f'Reusing already existing but empty dir: {dir}')
-    else:
-      os.makedirs(dir)
-      print(f'Make new dir for outputting params and result: {dir}')
-    return dir
-
-  n = 0
-  date = time.strftime("%m%d", time.gmtime())
-  save_dir = '_'.join([problem, date, str(n).zfill(post_digits)])
-  return _make_unique_dir(os.path.join(result_dir, save_dir))
+def prepare_dir(gin_path):
+  # prefix = datetime.now().strftime("%m%d_%H%M%S")
+  save_path = os.path.join('result', *os.path.split(gin_path[:-4])[1:])
+  if not os.path.exists(save_path):
+    print(f'Made new save directory: {save_path}')
+    os.makedirs(save_path)
+  else:
+    print(f'Found existing save directory: {save_path}')
+  shutil.copy(gin_path, save_path)
+  return save_path
 
 
 class TFWriter(dict):
@@ -261,8 +238,8 @@ class TFWriter(dict):
     assert all([isinstance(arg, str) for arg in args])
     self.top_dir = os.path.join(*args)
     super().__init__(
-      main=SummaryWriter(self.top_dir),
-      figure=SummaryWriter(os.path.join(self.top_dir, 'figure')),
+        main=SummaryWriter(self.top_dir),
+        figure=SummaryWriter(os.path.join(self.top_dir, 'figure')),
     )
 
   def new_subdirs(self, *args):
@@ -519,22 +496,23 @@ def plot_grid(update, grid, title, names, x='step_num'):
   print('Plot displayed!')
   print('Plot saved!')
 
+
 def plot_1D(data, limit_y, savefig='mask.png', title=None):
   sns.set()
   x = np.linspace(1, len(data), len(data))
   fig = plt.figure()
-  ax = fig.add_subplot(1,1,1)
+  ax = fig.add_subplot(1, 1, 1)
   if limit_y or max(data) < 1.0:
     ax.set_ylim([0.0, 1.0])
-  #if limit_y:
-  #plt.yscale('log')
+  # if limit_y:
+  # plt.yscale('log')
   plt.grid(True)
-  plt.plot(x,data)
+  plt.plot(x, data)
 
   plt.title(title)
   if savefig is not None:
     plt.savefig(savefig)
-    #plt.close()
+    # plt.close()
   return fig
 
 
@@ -556,9 +534,11 @@ def save_figure(name, save_dir, writer, mean_over_mode, epoch, mode):
     else:
       filepath = None
     if mode == 'test':
-      title = 'testiter {:02d} (mean) {} = {:02f} & (last) {} = {:02f}'.format(epoch, key, mean, key, x[len(x)-1])
+      title = 'testiter {:02d} (mean) {} = {:02f} & (last) {} = {:02f}'.format(
+          epoch, key, mean, key, x[len(x) - 1])
     else:
-      title = 'epoch {:02d} (mean) {} = {:02f} & (last) {} = {:02f}'.format(epoch, key, mean, key, x[len(x)-1])
+      title = 'epoch {:02d} (mean) {} = {:02f} & (last) {} = {:02f}'.format(
+          epoch, key, mean, key, x[len(x) - 1])
     if key in ['train_nll', 'test_nll']:
       limit_y = True
     else:
