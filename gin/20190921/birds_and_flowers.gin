@@ -1,0 +1,8 @@
+include 'gin/20190921/common.gin'
+
+
+## Datset configuration
+
+# ilsvrc_2012, aircraft, cu_birds, omniglot, quickdraw, vgg_flower, dtd, fungi
+MetaMultiDataset.datasets = ['cu_birds', 'vgg_flower']
+MetaMultiDataset.use_ontology = False

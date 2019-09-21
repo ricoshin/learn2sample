@@ -3,6 +3,8 @@ import pdb
 import random
 import sys
 from collections import Counter
+from collections.abc import Iterable
+from random import randrange
 
 import gin
 import matplotlib.pyplot as plt
@@ -29,6 +31,9 @@ class Dataset(object):
     self._n_classes = None
     self._n_samples = None
 
+  def __iter__(self):
+    return iter([self.imgs, self.labels, self.ids])
+
   @property
   def n_classes(self):
     if self._n_classes is None:
@@ -41,9 +46,14 @@ class Dataset(object):
       self._n_samples = int(self.imgs.size(0) / self.n_classes)
     return self._n_samples
 
+  def offset_indices(self, offset_labels, offset_ids):
+    labels = self.labels + offset_labels
+    ids = self.ids + offset_ids
+    return Dataset(self.imgs, labels, ids)
+
   def get_view_classwise_fn(self):
     def view_classwise_fn(x):
-      assert x.size(0) == self.n_classes*self.n_samples
+      assert x.size(0) == self.n_classes * self.n_samples
       rest_dims = [x.size(i) for i in range(1, len(x.shape))]
       return x.view(self.n_classes, self.n_samples, *rest_dims)
     return view_classwise_fn
@@ -53,7 +63,7 @@ class Dataset(object):
       assert x.size(0) == self.n_classes
       assert x.size(1) == self.n_samples
       rest_dims = [x.size(i) for i in range(2, len(x.shape))]
-      return x.view(self.n_classes*self.n_samples, *rest_dims)
+      return x.view(self.n_classes * self.n_samples, *rest_dims)
     return view_elementwise_fn
 
   def cuda(self):
@@ -103,17 +113,30 @@ class Dataset(object):
     """
     return cls.from_numpy(imgs.numpy(), labels.numpy(), ids.numpy())
 
+  @classmethod
+  def concat(cls, datasets):
+    assert isinstance(datasets, Iterable)
+    return cls(*map(lambda x: torch.cat(x, dim=0), zip(*datasets)))
+
 
 class Episode(object):
-  def __init__(self, support, query):
+  def __init__(self, support, query, n_total_classes):
     assert all([isinstance(set, Dataset) for set in [support, query]])
     self.s = support
     self.q = query
+    self.n_total_classes = n_total_classes
+
+  def __iter__(self):
+    return iter([self.s, self.q])
 
   @property
   def n_classes(self):
     assert self.s.n_classes == self.q.n_classes
     return self.s.n_classes
+
+  def offset_indices(self, offset_labels, offset_ids):
+    return Episode(*[set.offset_indices(offset_labels, offset_ids)
+                   for set in self], self.n_total_classes)
 
   def cuda(self):
     self.s = self.s.cuda()
@@ -129,7 +152,20 @@ class Episode(object):
     return (*self.s.numpy(), *self.q.numpy())
 
   @classmethod
-  def from_numpy(cls, episode):
+  def concat(cls, episodes):
+    assert isinstance(episodes, Iterable)
+    episodes_ = []
+    prev_n_cls = prev_n_total_cls = 0
+    new_n_total_cls = 0
+    for episode in episodes:
+      episodes_.append(episode.offset_indices(prev_n_cls, prev_n_total_cls))
+      prev_n_cls = episode.n_classes
+      prev_n_total_cls = episode.n_total_classes
+      new_n_total_cls += episode.n_total_classes
+    return cls(*map(Dataset.concat, zip(*episodes_)), new_n_total_cls)
+
+  @classmethod
+  def from_numpy(cls, episode, n_total_classes):
     """Args:
         episode[0:3]: support image / support labels / support class ids
         episode[4:6]: query image / query labels / query class ids
@@ -140,10 +176,10 @@ class Episode(object):
     """
     support = Dataset.from_numpy(*episode[0:3])
     query = Dataset.from_numpy(*episode[3:6])
-    return cls(support, query)
+    return cls(support, query, n_total_classes)
 
   @classmethod
-  def from_tf(cls, episode):
+  def from_tf(cls, episode, n_total_classes):
     """Args:
         episode[0:3]: support image / support labels / support class ids
         episode[4:6]: query image / query labels / query class ids
@@ -154,7 +190,7 @@ class Episode(object):
     """
     support = Dataset.from_tf(*episode[0:3])
     query = Dataset.from_tf(*episode[3:6])
-    return cls(support, query)
+    return cls(support, query, n_total_classes)
 
   def plot(self, size_multiplier=1, max_imgs_per_col=10, max_imgs_per_row=10):
     support_imgs, _, support_ids = self.s.numpy()
@@ -209,26 +245,33 @@ class Episode(object):
 
 @gin.configurable
 class MetaDataset(object):
-  def __init__(self, split):
+  def __init__(self, datasets, split, fixed_ways=None, fixed_support=None,
+               fixed_query=None, use_ontology=True):
     assert split in ['train', 'valid', 'test']
-    split = getattr(learning_spec.Split, split.upper())
+    assert isinstance(datasets, (list, tuple))
+    assert isinstance(datasets[0], str)
 
+    print(f'Loading MetaDataset for {split}..')
+    split = getattr(learning_spec.Split, split.upper())
     # Reading datasets
     # self.datasets = ['aircraft', 'cu_birds', 'dtd', 'fungi', 'ilsvrc_2012',
     # 'omniglot', 'quickdraw', 'vgg_flower']
-    # self.datasets = ['omniglot']
-    self.datasets = ['ilsvrc_2012']
+    self.datasets = datasets
 
     # Ontology setting
-    use_bilevel_ontology_list = [False] * len(self.datasets)
-    use_dag_ontology_list = [False] * len(self.datasets)
+    use_bilevel_ontology_list = []
+    use_dag_ontology_list = []
+    for dataset in self.datasets:
+      bilevel = dag = False
+      if dataset == 'omniglot' and use_ontology:
+        bilevel = True
+      elif dataset == 'ilsvrc_2012' and use_ontology:
+        dag = True
+      use_bilevel_ontology_list.append(bilevel)
+      use_dag_ontology_list.append(dag)
 
-    # # all_dataset
-    # use_bilevel_ontology_list[5] = True
-    # use_dag_ontology_list[4] = True
-
-    # Omniglot only
-    # use_bilevel_ontology_list[0] = True
+    assert len(self.datasets) == len(use_bilevel_ontology_list)
+    assert len(self.datasets) == len(use_dag_ontology_list)
 
     all_dataset_specs = []
     for dataset_name in self.datasets:
@@ -236,23 +279,20 @@ class MetaDataset(object):
       dataset_spec = dataset_spec_lib.load_dataset_spec(dataset_records_path)
       all_dataset_specs.append(dataset_spec)
 
-    # Fixed way / support / query
-    # (single dataset without ontology)
-    NUM_WAYS = None
-    NUM_SUPPORT = 5
-    NUM_QUERY = 15
-
-    # Episode description config
+    # Episode description config (if num is None, use gin configuration)
     self.episode_config = config.EpisodeDescriptionConfig(
-      num_query=NUM_QUERY, num_support=NUM_SUPPORT, num_ways=NUM_WAYS)
+        num_query=fixed_query, num_support=fixed_support, num_ways=fixed_ways)
 
     # Episode pipeline
-    self.episode_pipeline = pipeline.make_multisource_episode_pipeline(
-      dataset_spec_list=all_dataset_specs,
-      use_dag_ontology_list=use_dag_ontology_list,
-      use_bilevel_ontology_list=use_bilevel_ontology_list,
-      episode_descr_config=self.episode_config,
-      split=split, image_size=84)
+    self.episode_pipeline, self.n_total_classes = \
+      pipeline.make_multisource_episode_pipeline2(
+        dataset_spec_list=all_dataset_specs,
+        use_dag_ontology_list=use_dag_ontology_list,
+        use_bilevel_ontology_list=use_bilevel_ontology_list,
+        episode_descr_config=self.episode_config,
+        split=split, image_size=84)
+
+    print('MetaDataset loaded: ', ', '.join([d for d in self.datasets]))
 
   def loader(self, n_batches):
     if not tf.executing_eagerly():
@@ -260,14 +300,15 @@ class MetaDataset(object):
       next_episode = iterator.get_next()
       with tf.Session() as sess:
         for _ in range(n_batches):
-          episode = Episode.from_numpy(sess.run(next_episode))
+          episode = Episode.from_numpy(
+            sess.run(next_episode), self.n_total_classes)
           yield episode
     else:
       # iterator = iter(self.episode_pipeline)
       for i, episode in enumerate(self.episode_pipeline):
         if i == n_batches:
           break
-        episode = Episode.from_tf(episode)
+        episode = Episode.from_tf(episode, self.n_total_classes)
         yield episode
 
 
@@ -297,6 +338,43 @@ class PseudoMetaDataset(object):
       episode = Episode(self.make_fakeset(n_ways, n_support),
                         self.make_fakeset(n_ways, n_query))
       yield episode
+
+
+@gin.configurable
+class MetaMultiDataset(object):
+  def __init__(self, multi_mode, datasets, split, fixed_ways=None,
+               fixed_support=None, fixed_query=None, use_ontology=True):
+    assert split in ['train', 'valid', 'test']
+    assert isinstance(datasets, (list, tuple))
+    assert isinstance(datasets[0], str)
+    self.multi_mode = multi_mode
+
+    if self.multi_mode:
+      each_ways = []
+      for i in range(len(datasets)):
+        ways = fixed_ways // len(datasets)
+        if i < len(datasets) - 1:
+          ways += fixed_ways % len(datasets)
+        each_ways.append(ways)
+
+      self.meta_dataset = []
+      for dataset, n_way in zip(datasets, each_ways):
+        self.meta_dataset.append(
+            MetaDataset([dataset], split, n_way,
+                        fixed_support, fixed_query, use_ontology))
+    else:
+      self.meta_dataset = MetaDataset(datasets, split, fixed_ways,
+                                      fixed_support, fixed_query, use_ontology)
+
+  def loader(self, n_batches):
+    if self.multi_mode:
+      for i in range(n_batches):
+        if i == n_batches:
+          break
+        yield Episode.concat([next(meta_d.loader(1))
+                             for meta_d in self.meta_dataset])
+    else:
+      return self.meta_dataset.loader(n_batches)
 
 
 if __name__ == '__main__':

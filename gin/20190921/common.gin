@@ -6,37 +6,37 @@ meta_train.valid_loop = @valid/loop
 meta_train.test_loop = @test/loop
 
 # args
-meta_train.meta_epoch = 3
-meta_train.tolerance = 1
+meta_train.meta_epoch = 100
+meta_train.tolerance = 2
 
 
 ## loop configuration
 
 # outer/inner steps
 loop.inner_lr = 1.0
-loop.inner_steps = 2
-train/loop.outer_steps = 2
-valid/loop.outer_steps = 2
-test/loop.outer_steps = 2
+loop.inner_steps = 150
+train/loop.outer_steps = 20
+valid/loop.outer_steps = 600
+test/loop.outer_steps = 600
 
 # only for meta-training
 train/loop.outer_lr = 0.001
 train/loop.outer_optim = "adam"
-train/loop.unroll_steps = 2
+train/loop.unroll_steps = 5
 train/loop.meta_batchsize = 0
 
 # sampler
-Sampler.embed_dim = 50
-Sampler.rnn_dim = 50
+Sampler.embed_dim = 500
+Sampler.rnn_dim = 500
 MaskGenerator.input_more = True
-MaskGenerator.output_more = False
+MaskGenerator.output_more = True
 MaskGenerator.sample_mode = False
-MaskGenerator.temp = 0.2
+MaskGenerator.temp = 1.0
 
 # log steps
-train/loop.log_steps = 1
-valid/loop.log_steps = 1
-test/loop.log_steps = 1
+train/loop.log_steps = 5
+valid/loop.log_steps = 20
+test/loop.log_steps = 20
 
 # modes
 train/loop.mode = "train"
@@ -45,10 +45,8 @@ test/loop.mode = "test"
 
 
 ## Datset configuration
-# ilsvrc_2012, aircraft, cu_birds, omniglot, quickdraw, vgg_flower, dtd, fungi
-MetaMultiDataset.datasets = ['omniglot']
+
 MetaMultiDataset.multi_mode = True
 MetaMultiDataset.fixed_ways = 10
 MetaMultiDataset.fixed_support = 5
 MetaMultiDataset.fixed_query = 15
-MetaMultiDataset.use_ontology = False

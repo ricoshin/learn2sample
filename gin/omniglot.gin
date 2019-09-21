@@ -42,3 +42,12 @@ test/loop.log_steps = 20
 train/loop.mode = "train"
 valid/loop.mode = "valid"
 test/loop.mode = "test"
+
+## Datset configuration
+# ilsvrc_2012, aircraft, cu_birds, omniglot, quickdraw, vgg_flower, dtd, fungi
+MetaMultiDataset.datasets = ['cu_birds', 'ilsvrc_2012']
+MetaMultiDataset.multi_mode = True
+MetaMultiDataset.fixed_ways = 10
+MetaMultiDataset.fixed_support = 5
+MetaMultiDataset.fixed_query = 15
+MetaMultiDataset.use_ontology = False

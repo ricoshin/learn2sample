@@ -380,6 +380,93 @@ def make_multisource_episode_pipeline(dataset_spec_list,
   return dataset
 
 
+def make_multisource_episode_pipeline2(dataset_spec_list,
+                                       use_dag_ontology_list,
+                                       use_bilevel_ontology_list,
+                                       split,
+                                       episode_descr_config,
+                                       pool=None,
+                                       shuffle_buffer_size=None,
+                                       read_buffer_size_bytes=None,
+                                       num_prefetch=0,
+                                       image_size=None,
+                                       num_to_take=None):
+  """Returns a pipeline emitting data from multiple sources as Episodes.
+
+  Each episode only contains data from one single source. For each episode, its
+  source is sampled uniformly across all sources.
+
+  Args:
+    dataset_spec_list: A list of DatasetSpecification, one for each source.
+    use_dag_ontology_list: A list of Booleans, one for each source: whether to
+      use that source's DAG-structured ontology to sample episode classes.
+    use_bilevel_ontology_list: A list of Booleans, one for each source: whether
+      to use that source's bi-level ontology to sample episode classes.
+    split: A learning_spec.Split object identifying the sources split. It is the
+      same for all datasets.
+    episode_descr_config: An instance of EpisodeDescriptionConfig containing
+      parameters relating to sampling shots and ways for episodes.
+    pool: String (optional), for example-split datasets, which example split to
+      use ('train', 'valid', or 'test'), used at meta-test time only.
+    shuffle_buffer_size: int or None, shuffle buffer size for each Dataset.
+    read_buffer_size_bytes: int or None, buffer size for each TFRecordDataset.
+    num_prefetch: int, the number of examples to prefetch for each class of each
+      dataset. Prefetching occurs just after the class-specific Dataset object
+      is constructed. If < 1, no prefetching occurs.
+    image_size: int, desired image size used during decoding.
+    num_to_take: Optional, a list specifying for each dataset the number of
+      examples per class to restrict to (for this given split). If provided, its
+      length must be the same as len(dataset_spec). If None, no restrictions are
+      applied to any dataset and all data per class is used.
+
+  Returns:
+    A Dataset instance that outputs fully-assembled and decoded episodes.
+  """
+  if pool is not None:
+    if not data.POOL_SUPPORTED:
+      raise NotImplementedError('Example-level splits or pools not supported.')
+  if num_to_take is not None and len(num_to_take) != len(dataset_spec_list):
+    raise ValueError('num_to_take does not have the same length as '
+                     'dataset_spec_list.')
+  if num_to_take is None:
+    num_to_take = [-1] * len(dataset_spec_list)
+  sources = []
+  total_num_classes = 0
+  for (dataset_spec, use_dag_ontology, use_bilevel_ontology,
+       num_to_take_for_dataset) in zip(dataset_spec_list, use_dag_ontology_list,
+                                       use_bilevel_ontology_list, num_to_take):
+    episode_reader = reader.EpisodeReader(dataset_spec, split,
+                                          shuffle_buffer_size,
+                                          read_buffer_size_bytes, num_prefetch,
+                                          num_to_take_for_dataset)
+    sampler = sampling.EpisodeDescriptionSampler(
+        episode_reader.dataset_spec,
+        split,
+        episode_descr_config,
+        pool=pool,
+        use_dag_hierarchy=use_dag_ontology,
+        use_bilevel_hierarchy=use_bilevel_ontology)
+    dataset = episode_reader.create_dataset_input_pipeline(sampler, pool=pool)
+    sources.append(dataset)
+    total_num_classes += sampler.num_classes
+
+  # Sample uniformly among sources
+  dataset = tf.data.experimental.sample_from_datasets(sources)
+
+  # Episodes coming out of `dataset` contain flushed examples and are internally
+  # padded with dummy examples. `process_episode` discards flushed examples,
+  # splits the episode into support and query sets, removes the dummy examples
+  # and decodes the example strings.
+  chunk_sizes = sampler.compute_chunk_sizes()
+  map_fn = functools.partial(
+      process_episode, chunk_sizes=chunk_sizes, image_size=image_size)
+  dataset = dataset.map(map_fn)
+
+  # Overlap episode processing and training.
+  dataset = dataset.prefetch(1)
+  return dataset, total_num_classes
+
+
 def make_one_source_batch_pipeline(dataset_spec,
                                    split,
                                    batch_size,

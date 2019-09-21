@@ -207,11 +207,13 @@ class MaskGenerator(nn.Module):
       x = torch.cat([x, mask, loss], dim=1)  # [n_cls , feature_dim + 2]
 
     self.state = self.gru(x, state)  # [n_cls , rnn_h_dim]
-    out = self.out_linear(state)  # [n_cls , 1]
+    x = self.out_linear(state)  # [n_cls , 1]
 
     if self.output_more:
-      m = out[:, 0].unsqueeze(1)
-      lr = out[:, 1].mean().exp()
+      m = x[:, 0].unsqueeze(1)
+      lr = x[:, 1].mean().exp()
+    else:
+      m = x
 
     if self.sample_mode:
       m = RelaxedBernoulli(self.temp, m).rsample()

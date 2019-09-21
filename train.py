@@ -10,7 +10,7 @@ import gin
 import numpy as np
 import torch
 import torch.nn.functional as F
-from loader import MetaDataset, PseudoMetaDataset
+from loader import MetaDataset, PseudoMetaDataset, MetaMultiDataset
 from networks.model import Model
 from networks.sampler import EncoderClass, EncoderInstance, Sampler
 from utils import utils
@@ -50,7 +50,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, inner_lr, outer_lr=None,
 
   train = True if mode == 'train' else False
   force_base = True
-  metadata = MetaDataset(split=mode)
+  metadata = MetaMultiDataset(split=mode)
   # metadata = PseudoMetaDataset()
 
   if meta_model is not None:
@@ -84,27 +84,6 @@ def loop(mode, outer_steps, inner_steps, log_steps, inner_lr, outer_lr=None,
       except:  # OOM
         continue
       view_classwise = epi.s.get_view_classwise_fn()
-      # view_elementwise = epi.s.get_view_elementwise_fn()
-
-      # linear = torch.nn.Linear(32, epi.s.n_classes)
-      # params = itertools.chain(
-      #     sampler.enc_ins.parameters(), linear.parameters())
-      #
-      # opt = torch.optim.SGD(params, lr=0.1)
-      # for m in range(150):
-      #   try:
-      #     x = sampler.enc_ins(epi.s.imgs)
-      #     x = F.log_softmax(x.squeeze(), dim=1)
-      #     loss = torch.nn.NLLLoss()(x, epi.s.labels)
-      #     acc = (x.argmax(dim=1) == epi.s.labels).float().mean()
-      #     sampler.enc_ins.zero_grad()
-      #     linear.zero_grad()
-      #     loss.backward(retain_graph=True)
-      #     opt.step()
-      #   except:
-      #     import pdb
-      #     pdb.set_trace()
-      # print(f'[pretrained encoder] loss:{loss.tolist()}, acc:{acc.tolist()}')
 
       with torch.set_grad_enabled(train):
         xs = sampler.enc_ins(epi.s.imgs)
@@ -130,8 +109,15 @@ def loop(mode, outer_steps, inner_steps, log_steps, inner_lr, outer_lr=None,
 
         # generate mask
         with torch.set_grad_enabled(train):
-          mask, lr = sampler.mask_gen(xs, mask, loss_s)  # class mask
+          mask_gen_out = sampler.mask_gen(xs, mask, loss_s)  # class mask
+
+        if isinstance(mask_gen_out, tuple):
           # mask = C(torch.ones(epi.n_classes, 1)).detach()
+          mask = mask_gen_out[0]
+          lr = mask_gen_out[1]
+        else:
+          mask = mask_gen_out
+          lr = inner_lr
 
         if not train:
           mask.detach_()
@@ -169,7 +155,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, inner_lr, outer_lr=None,
             params_b0 = params_b0.sgd_step(
                 loss_s_m_b0, inner_lr, second_order=False).detach()
             params_b1 = params_b1.sgd_step(
-                loss_s_w_b1, lr.detach(), second_order=False).detach()
+                loss_s_w_b1, lr, second_order=False).detach()
             # test on query set
             loss_q_m_b0, acc_q_m_b0 = model(epi.q, params_b0, mask=None)
             loss_q_m_b1, acc_q_m_b1 = model(epi.q, params_b1, mask=None)
@@ -239,9 +225,9 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   best_acc = 0
   for i in range(1, meta_epoch + 1):
     sampler, result_train = train_loop(epoch=i)
-    _, result_valid = valid_loop(meta_model=sampler)
-    valid_max_acc_mean = result_valid.get_max(
-        col='ours_acc_q_m', group='outer_step').mean()[0]
+    _, result_valid = valid_loop(meta_model=sampler, epoch=i)
+    valid_max_acc_mean = result_valid.group_max(
+        column_name='ours_acc_q_m', group_name='outer_step').mean()[0]
 
     result_train.save_to_csv(f'train/epoch_{i}', save_path)
     result_valid.save_to_csv(f'valid/epoch_{i}', save_path)
@@ -261,16 +247,13 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   _, result_test = test_loop(meta_model=C(Sampler.load(save_path)))
   result_test.save_to_csv(f'test/epoch_{i}', save_path)
 
-  ours = result_test.get_max(col='ours_acc_q_m', group='outer_step')
-  b0 = result_test.get_max(col='b0_acc_q_m', group='outer_step')
-  b1 = result_test.get_max(col='b1_acc_q_m', group='outer_step')
+  acc = result_test.get_best_acc()
+  loss = result_test.get_best_loss()
 
-  print(f'\n[Final result]')
-  print(f'(ours) mean:{ours.mean()[0]:6.2f} / std:{ours.std()[0]:6.2f}')
-  print(f'(b0) mean:{b0.mean()[0]:6.2f} / std:{b0.std()[0]:6.2f}')
-  print(f'(b1) mean:{b1.mean()[0]:6.2f} / std:{b1.std()[0]:6.2f}\n')
-  import pdb; pdb.set_trace()
-  print('end')
+  print(f'\nFinal result:\n')
+  acc.print_mean_std('[Accuracy]', save_path)
+  loss.print_mean_std('[Loss]', save_path)
+  print('\nend')
 
 
 if __name__ == '__main__':
