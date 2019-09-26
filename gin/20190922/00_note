@@ -1,0 +1,10 @@
+Experiments on an artificial dataset where two different datasets are
+straightforward to distinguish from each other but with the varying relative
+difficulties.
+
+python train.py --gin 20190924/common
+# panel 1 / omniglot_and_imagenet / inner lr 0.1 / outer lr 0.0001 adam
+
+python train.py --gin 20190924/omniglot_and_imagenet  # panel 1
+python train.py --gin 20190924/birds_and_imagenet  # panel 2
+python train.py --gin 20190924/birds_and_flowers  # panel 3

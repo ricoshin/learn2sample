@@ -1,0 +1,12 @@
+ImageNet 2 classes sampling.
+Test mask temperature and sampling mode.
+Test meta minibath larger than 1.
+
+python train.py --gin 20190925/imagenet_two_cls_metabatch_5  # panel 0
+python train.py --gin 20190925/imagenet_two_cls_sample  # panel 1
+python train.py --gin 20190925/imagenet_two_cls_tmp_2_sample  # panel 2
+python train.py --gin 20190925/imagenet_two_cls_tmp_2  # panel 3
+python train.py --gin 20190925/imagenet_two_cls_tmp_half_sample  # panel 4
+python train.py --gin 20190925/imagenet_two_cls_tmp_half  # panel 5
+python train.py --gin 20190925/imagenet_two_cls  # panel 6
+python train.py --gin 20190925/imagenet_two_cls_metabatch_5_outer_lr_3  # panel 7

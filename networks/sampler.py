@@ -239,11 +239,12 @@ class Sampler(nn.Module):
   def detach_(self):
     self.mask_gen.detach_()
 
-  def save(self, save_path):
-    file_path = os.path.join(save_path, Sampler._save_name)
-    with open(file_path, 'wb') as f:
-      torch.save(self.state_dict(), f)
-    print(f'Saved meta-learned parameters as: {file_path}')
+  def save(self, save_path=None):
+    if save_path:
+      file_path = os.path.join(save_path, Sampler._save_name)
+      with open(file_path, 'wb') as f:
+        torch.save(self.state_dict(), f)
+      print(f'Saved meta-learned parameters as: {file_path}')
 
   @classmethod
   def load(cls, load_path):

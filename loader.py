@@ -23,13 +23,15 @@ tf.enable_eager_execution()
 
 
 class Dataset(object):
-  def __init__(self, imgs, labels, ids):
+  def __init__(self, imgs, labels, ids, name='Dataset'):
     assert all([isinstance(t, torch.Tensor) for t in [imgs, labels, ids]])
+    assert name in ['Dataset', 'Support', 'Query']
     self.imgs = imgs
     self.labels = labels
     self.ids = ids
     self._n_classes = None
     self._n_samples = None
+    self._name = name
 
   def __iter__(self):
     return iter([self.imgs, self.labels, self.ids])
@@ -83,7 +85,7 @@ class Dataset(object):
     return (imgs, labels, ids)
 
   @classmethod
-  def from_numpy(cls, imgs, labels, ids):
+  def from_numpy(cls, imgs, labels, ids, name):
     """Args:
         imgs(numpy.ndarray): images
         labels(numpy.ndarray): temporal class id for current episode
@@ -99,10 +101,11 @@ class Dataset(object):
       return torch.from_numpy(labels).long()
     # plot_episode(support_images=e[0], support_class_ids=e[2],
     #              query_images=e[3], query_class_ids=e[5])
-    return cls(to_torch_imgs(imgs), to_torch_ids(labels), to_torch_ids(ids))
+    return cls(
+      to_torch_imgs(imgs), to_torch_ids(labels), to_torch_ids(ids), name)
 
   @classmethod
-  def from_tf(cls, imgs, labels, ids):
+  def from_tf(cls, imgs, labels, ids, name):
     """Args:
         imgs(tf.Tensor): images
         labels(tf.Tensor): temporal class indices for current episode
@@ -111,13 +114,66 @@ class Dataset(object):
       Returns:
         tuple(torch.FloatTensor, torch.LongTensor, torch.LongTensor)
     """
-    return cls.from_numpy(imgs.numpy(), labels.numpy(), ids.numpy())
+    return cls.from_numpy(imgs.numpy(), labels.numpy(), ids.numpy(), name)
 
   @classmethod
   def concat(cls, datasets):
     assert isinstance(datasets, Iterable)
     return cls(*map(lambda x: torch.cat(x, dim=0), zip(*datasets)))
 
+  def plot(self, size_multiplier=1, max_imgs_per_col=10, max_imgs_per_row=10,
+    show=False):
+    images, _, class_ids = self.numpy()
+    # FIX LATER: This is only for the tensors already up on GPU.
+    n_samples_per_class = Counter(class_ids)
+    n_samples_per_class = {k: min(v, max_imgs_per_col)
+                           for k, v in n_samples_per_class.items()}
+    id_plot_index_map = {k: i for i, k
+                         in enumerate(n_samples_per_class.keys())}
+    num_classes = min(max_imgs_per_row, len(n_samples_per_class.keys()))
+    max_n_sample = max(n_samples_per_class.values())
+
+    figwidth = max_n_sample
+    figheight = num_classes
+    figsize = (figheight * size_multiplier, figwidth * size_multiplier)
+    fig, axarr = plt.subplots(figwidth, figheight, figsize=figsize)
+    fig.suptitle('%s Set' % self._name, size='20')
+    fig.tight_layout(pad=3, w_pad=0.1, h_pad=0.1)
+    reverse_id_map = {v: k for k, v in id_plot_index_map.items()}
+
+    for i, ax in enumerate(axarr.flat):
+      ax.patch.set_alpha(0)
+      # Print the class ids, this is needed since, we want to set the x axis
+      # even there is no picture.
+      ax.set(xlabel=reverse_id_map[i % figheight], xticks=[], yticks=[])
+      ax.label_outer()
+
+    for image, class_id in zip(images, class_ids):
+      # First decrement by one to find last spot for the class id.
+      n_samples_per_class[class_id] -= 1
+      # If class column is filled or not represented: pass.
+      if (n_samples_per_class[class_id] < 0 or
+              id_plot_index_map[class_id] >= max_imgs_per_row):
+        continue
+      # If width or height is 1, then axarr is a vector.
+      if axarr.ndim == 1:
+        ax = axarr[n_samples_per_class[class_id]
+                   if figheight == 1 else id_plot_index_map[class_id]]
+      else:
+        ax = axarr[n_samples_per_class[class_id],
+                   id_plot_index_map[class_id]]
+      ax.imshow(image / 2 + 0.5)
+    return plt
+
+  def save_fig(self, file_name, save_path):
+    if save_path is None:
+      return
+    file_path = os.path.join(save_path, file_name + '.png')
+    if not os.path.exists(os.path.dirname(file_path)):
+      os.makedirs(os.path.dirname(file_path))
+    plot = self.plot()
+    plot.savefig(file_path)
+    plot.close()
 
 class Episode(object):
   def __init__(self, support, query, n_total_classes):
@@ -174,8 +230,8 @@ class Episode(object):
       Returns:
         loader.Dataset
     """
-    support = Dataset.from_numpy(*episode[0:3])
-    query = Dataset.from_numpy(*episode[3:6])
+    support = Dataset.from_numpy(*episode[0:3], 'Support')
+    query = Dataset.from_numpy(*episode[3:6], 'Query')
     return cls(support, query, n_total_classes)
 
   @classmethod
@@ -188,59 +244,13 @@ class Episode(object):
       Returns:
         loader.Dataset
     """
-    support = Dataset.from_tf(*episode[0:3])
-    query = Dataset.from_tf(*episode[3:6])
+    support = Dataset.from_tf(*episode[0:3], 'Support')
+    query = Dataset.from_tf(*episode[3:6], 'Query')
     return cls(support, query, n_total_classes)
 
-  def plot(self, size_multiplier=1, max_imgs_per_col=10, max_imgs_per_row=10):
-    support_imgs, _, support_ids = self.s.numpy()
-    query_imgs, _, query_ids = self.q.numpy()
-    for name, images, class_ids in zip(('Support', 'Query'),
-                                       (support_imgs, query_imgs),
-                                       (support_ids, query_ids)):
-      # FIX LATER: This is only for the tensors already up on GPU.
-
-      n_samples_per_class = Counter(class_ids)
-      n_samples_per_class = {k: min(v, max_imgs_per_col)
-                             for k, v in n_samples_per_class.items()}
-      id_plot_index_map = {k: i for i, k
-                           in enumerate(n_samples_per_class.keys())}
-      num_classes = min(max_imgs_per_row, len(n_samples_per_class.keys()))
-      max_n_sample = max(n_samples_per_class.values())
-
-      figwidth = max_n_sample
-      figheight = num_classes
-      if name == 'Support':
-        print('#Classes: %d' % len(n_samples_per_class.keys()))
-      figsize = (figheight * size_multiplier, figwidth * size_multiplier)
-      fig, axarr = plt.subplots(figwidth, figheight, figsize=figsize)
-      fig.suptitle('%s Set' % name, size='20')
-      fig.tight_layout(pad=3, w_pad=0.1, h_pad=0.1)
-      reverse_id_map = {v: k for k, v in id_plot_index_map.items()}
-
-      for i, ax in enumerate(axarr.flat):
-        ax.patch.set_alpha(0)
-        # Print the class ids, this is needed since, we want to set the x axis
-        # even there is no picture.
-        ax.set(xlabel=reverse_id_map[i % figheight], xticks=[], yticks=[])
-        ax.label_outer()
-
-      for image, class_id in zip(images, class_ids):
-        # First decrement by one to find last spot for the class id.
-        n_samples_per_class[class_id] -= 1
-        # If class column is filled or not represented: pass.
-        if (n_samples_per_class[class_id] < 0 or
-                id_plot_index_map[class_id] >= max_imgs_per_row):
-          continue
-        # If width or height is 1, then axarr is a vector.
-        if axarr.ndim == 1:
-          ax = axarr[n_samples_per_class[class_id]
-                     if figheight == 1 else id_plot_index_map[class_id]]
-        else:
-          ax = axarr[n_samples_per_class[class_id],
-                     id_plot_index_map[class_id]]
-        ax.imshow(image / 2 + 0.5)
-      plt.show()
+  def show(self, size_multiplier=1, max_imgs_per_col=10, max_imgs_per_row=10):
+    self.s.plot(size_multiplier, max_imgs_per_col, max_imgs_per_row).show()
+    self.q.plot(size_multiplier, max_imgs_per_col, max_imgs_per_row).show()
 
 
 @gin.configurable
@@ -279,8 +289,14 @@ class MetaDataset(object):
       dataset_spec = dataset_spec_lib.load_dataset_spec(dataset_records_path)
       all_dataset_specs.append(dataset_spec)
 
-    # Episode description config (if num is None, use gin configuration)
-    self.episode_config = config.EpisodeDescriptionConfig(
+    if fixed_ways and use_ontology:
+      max_ways_upper_bound = min_ways = fixed_ways
+      self.episode_config = config.EpisodeDescriptionConfig(
+        num_query=fixed_query, num_support=fixed_support, min_ways=min_ways,
+        max_ways_upper_bound=max_ways_upper_bound, num_ways=None)
+    else:
+      # Episode description config (if num is None, use gin configuration)
+      self.episode_config = config.EpisodeDescriptionConfig(
         num_query=fixed_query, num_support=fixed_support, num_ways=fixed_ways)
 
     # Episode pipeline
@@ -385,11 +401,11 @@ if __name__ == '__main__':
   for i, epi in enumerate(metadata.loader(n_batches=2)):
     print(epi.s.imgs.shape, epi.s.labels.shape,
           epi.q.imgs.shape, epi.q.labels.shape)
-    epi.plot()
+    epi.show()
 
   metadata = MetaDataset(split='test')
 
   for i, epi in enumerate(metadata.loader(n_batches=2)):
     print(epi.s.imgs.shape, epi.s.labels.shape,
           epi.q.imgs.shape, epi.q.labels.shape)
-    epi.plot()
+    epi.show()
