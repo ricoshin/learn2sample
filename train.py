@@ -22,15 +22,17 @@ parser.add_argument('--gin', type=str, default='omniglot',
 @gin.configurable
 def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
                save_path):
-  writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
-  no_improvement = 0
   best_acc = 0
+  no_improvement = 0
+  writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
+  sampler = C(Sampler())
   for i in range(1, meta_epoch + 1):
     # meta train
-    sampler, result_train = train_loop(epoch=i, save_path=save_path)
+    sampler, result_train = train_loop(
+      sampler=sampler, epoch=i, save_path=save_path)
     # meta valid
     _, result_valid = valid_loop(
-        meta_model=sampler, epoch=i, save_path=save_path)
+      sampler=sampler, epoch=i, save_path=save_path)
 
     loss = result_valid.get_best_loss().mean()
     acc = result_valid.get_best_acc().mean()
@@ -55,7 +57,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
 
   # meta test
   _, result_test = test_loop(
-      meta_model=C(Sampler.load(save_path)), save_path=save_path)
+      sampler=C(Sampler.load(save_path)), save_path=save_path)
 
   result_test.save_to_csv('records/test', save_path)
   result_test.save_final_lineplot('loss_q_m', save_path)

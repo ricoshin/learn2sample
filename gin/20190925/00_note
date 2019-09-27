@@ -10,3 +10,44 @@ python train.py --gin 20190925/imagenet_two_cls_tmp_half_sample  # panel 4
 python train.py --gin 20190925/imagenet_two_cls_tmp_half  # panel 5
 python train.py --gin 20190925/imagenet_two_cls  # panel 6
 python train.py --gin 20190925/imagenet_two_cls_metabatch_5_outer_lr_3  # panel 7
+
+2nd valid epoch
+
+imagenet_two_cls_metabatch_5
+>> valid_acc: b0(21.33) > b1(19.19) > ours (18.61)
+>> valid_loss: ours(2.6) > b1(5.5) > b0(5.3)
+>> no valid improvement
+
+imagenet_two_cls_tmp_half_sample
+>> valid_acc: b0(21.07) > b1(19.13) > ours(15.75)
+>> valid_loss: ours(3.588) > b1(5.132) > b0(5.429)
+>> acc: worse / loss: better
+
+imagenet_two_cls_tmp_2
+>> valid_acc: b0(21.26) > b1(19.21) > ours(18.51)
+>> valid_loss: ours(2.513) > b1(4.411) > b0(5.541)
+>> acc: better / loss: better
+
+imagenet_two_cls_tmp_half
+>> valid_acc: b0(21.41) > b1(19.06) > ours (17.34)
+>> valid_loss: ours(2.767) > b1(4.363) > b0(5.503)
+>> acc: worse / loss: worse
+
+imagenet_two_cls_tmp_2_sample d
+>> valid_acc: b0(21.23) > b1(19.11) > ours(15.93)
+>> valid_loss: ours(3.146) > b0(6.356) > b1(6.356)
+>> acc: worse / loss: better
+
+imagenet_two_cls
+>> valid_acc: b0(21.24) > b1(18.99) > ours(16.49)
+>> valid_loss: ours(2.733) > b1(2.821) > ours(5.509)
+>> acc: worse / loss: worse
+
+imagenet_two_cls_sample
+>> valid_acc: b0(20.86) > b1(18.78) > ours(15.67)
+>> valid_loss: b0(3.775) > b0(5.585) > ours(6.167)
+>> acc: worse / loss: worse (temporal craziness?)
+
+imagenet_two_cls_metabatch_5_outer_lr_3
+>> valid_acc: b0(21.31) > b1(19.21) > ours(18.78)
+>> valid_loss: ours(2.53) > b1 (4.949) > b0(5.573)

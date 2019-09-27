@@ -7,7 +7,6 @@ import numpy as np
 import torch
 from loader import MetaDataset, MetaMultiDataset, PseudoMetaDataset
 from networks.model import Model
-from networks.sampler import EncoderClass, EncoderInstance, Sampler
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.result import MaskRecoder, Result
@@ -20,7 +19,7 @@ sig_2 = utils.getSignalCatcher('SIGTSTP')
 @gin.configurable
 def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
          outer_lr=None, outer_optim=None, unroll_steps=None, meta_batchsize=0,
-         meta_model=None, epoch=1, save_path=None):
+         sampler=None, epoch=1, save_path=None):
   """Args:
       meta_batchsize(int): If meta_batchsize |m| > 0, gradients for multiple
         unrollings from each episodes size of |m| will be accumulated in
@@ -42,21 +41,19 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   metadata = MetaMultiDataset(split=mode)
   # metadata = PseudoMetaDataset()
 
-  if meta_model is not None:
-    sampler = meta_model
-  else:
-    sampler = C(Sampler())
-
   if train:
     outer_optim = {'sgd': 'SGD', 'adam': 'Adam'}[outer_optim.lower()]
     outer_optim = getattr(torch.optim, outer_optim)(
         sampler.parameters(), lr=outer_lr)
     if meta_batchsize > 0:
       # serial processing of meta-minibatch
-      update_steps = inner_steps * meta_batchsize
+      update_epochs = meta_batchsize
+      update_steps = None
     else:
       #  update at every unrollings
       update_steps = unroll_steps
+      update_epochs = None
+    assert (update_epochs is None) != (update_steps is None)
 
   # for result recordin
   result = Result()
@@ -125,7 +122,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           params = params.sgd_step(
               loss_s_w, lr, second_order=True)
           # test on query set
-          loss_q_m, acc_q_m = model(epi.q, params, mask=None)
+          loss_q_m, acc_q_m, conf = model(epi.q, params, mask=None)
 
         # record result
         result_dict.update({
@@ -137,8 +134,8 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
         if not train or force_base:
           # feed support set (baseline)
-          loss_s_m_b0, acc_s_m_b0 = model(epi.s, params_b0, None)
-          loss_s_m_b1, acc_s_m_b1 = model(epi.s, params_b1, None)
+          loss_s_m_b0, acc_s_m_b0, _, _ = model(epi.s, params_b0, None)
+          loss_s_m_b1, acc_s_m_b1, _, _ = model(epi.s, params_b1, None)
           # manaul masking (only for baseline 1)
           loss_s_w_b1 = loss_s_m_b1 * mask.mean().detach()
           acc_s_w_b1 = acc_s_m_b1 * mask.mean().detach()
@@ -150,8 +147,10 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
             params_b1 = params_b1.sgd_step(
                 loss_s_w_b1, lr, second_order=False).detach()
             # test on query set
-            loss_q_m_b0, acc_q_m_b0 = model(epi.q, params_b0, mask=None)
-            loss_q_m_b1, acc_q_m_b1 = model(epi.q, params_b1, mask=None)
+            loss_q_m_b0, acc_q_m_b0, conf_pos_b0, conf_neg_b0 = model(
+              epi.q, params_b0, mask=None)
+            loss_q_m_b1, acc_q_m_b1, conf_pos_b1, conf_neg_b1 = model(
+              epi.q, params_b1, mask=None)
           # record result
           result_dict.update({
             'b0_loss_s_m': loss_s_m_b0, 'b0_acc_s_m': acc_s_m_b0,
@@ -170,19 +169,21 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
             f'[epoch:{epoch:2d}|{mode}]'
             f'[out:{i:4d}/{outer_steps}|in:{k:4d}/{inner_steps}][{lr:6.4f}]'
             f'[{"|".join([f"{m:4.2f}" for m in mask.squeeze().tolist()])}]|'
-            f'M>0.5:{(mask > 0.5).sum().tolist():2d}|W/S/Q:{epi.n_classes:2d}/'
+            # f'M>0.5:{(mask > 0.5).sum().tolist():2d}|W/S/Q:{epi.n_classes:2d}/'
             f'{epi.s.n_samples:2d}/{epi.q.n_samples:2d}|'
-            f'S:w.{loss_s_w.tolist():6.2f}({loss_s.mean().tolist():6.2f})/'
-            f'w.{acc_s_w.tolist()*100:6.2f}({acc_s.mean().tolist()*100:6.2f})%|'
-            f'Q:{loss_q_m.tolist():6.2f}(m.{np.log(epi.n_classes):3.1f})/'
-            f'{acc_q_m.tolist()*100:6.2f}%|'
+            # f'S:w.{loss_s_w.tolist():6.2f}({loss_s.mean().tolist():6.2f})/'
+            f'S:{loss_s_w.tolist():6.2f}/{acc_s_w.tolist()*100:6.2f}%|'
+            f'[ours]Q:{loss_q_m.tolist():6.2f}(m.{np.log(epi.n_classes):3.1f})/'
+            f'{acc_q_m.tolist()*100:6.2f}%/{conf:6.2f}|'
           )
           if not train or force_base:
             msg += (
               # f'[b0]S:{loss_s_m_b0:6.2f}/{acc_s_m_b0*100:6.2f}%|'
-              f'[b0]Q:{loss_q_m_b0:6.2f}/{acc_q_m_b0*100:6.2f}%|'
+              f'[b0]Q:{loss_q_m_b0:6.2f}/{acc_q_m_b0*100:6.2f}%/'
+              f'pos:{conf_pos_b0:4.2f}/ neg:{conf_neg_b0:4.2f}|'
               # f'[b1]S:{loss_s_m_b1:6.2f}/{acc_s_m_b1*100:6.2f}%|'
-              f'[b1]Q:{loss_q_m_b1:6.2f}/{acc_q_m_b1*100:6.2f}%|'
+              f'[b1]Q:{loss_q_m_b1:6.2f}/{acc_q_m_b1*100:6.2f}%/'
+              f'pos:{conf_pos_b1:4.2f}/ neg:{conf_neg_b1:4.2f}|'
             )
           print(msg)
 
@@ -195,13 +196,16 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           sampler.detach_()
 
         # meta(outer) learning
-        if train and k % update_steps == 0:
+        if ((train and update_steps and k % update_steps == 0) or
+            (train and update_epochs and i % update_epochs == 0)):
           outer_optim.step()
           sampler.zero_grad()
+          if update_epochs:
+            print(f'Meta-minibatch mode({meta_batchsize}): Sampler updated.')
 
       # tensorboard
       if train:
-        step = (epoch * outer_steps) + i
+        step = (epoch * (outer_steps - 1)) + i
         res = Result(result[result['outer_step'] == i])
         loss = res.get_best_loss().mean()
         acc = res.get_best_acc().mean()
@@ -217,6 +221,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
       # distinguishable episodes
       if not i == outer_steps:
+        print(f'Path for saving: {save_path}')
         print(f'End_of_episode: {i}')
 
   print(f'End_of_{mode}.')
