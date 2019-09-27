@@ -128,7 +128,7 @@ class Model(nn.Module):
       conf = x.exp().max(dim=1)[0]  # confidence
       conf_pos = conf[x.argmax(dim=1) == y]
       conf_neg = conf[x.argmax(dim=1) != y]
-      return loss.mean(), acc.mean(), conf_pos.mean(), conf_neg.mean()
+      return loss.mean(), acc.mean(), [conf_pos.mean(), conf_neg.mean()]
     # weighted average by mask
     else:
       loss = view_classwise(loss).mean(1, keepdim=True)
