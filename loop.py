@@ -9,7 +9,9 @@ from loader import MetaDataset, MetaMultiDataset, PseudoMetaDataset
 from networks.model import Model
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
+from utils.color import Color
 from utils.result import MaskRecoder, Result
+from utils.utils import print_colorized_mask, print_confidence
 
 C = utils.getCudaManager('default')
 sig_1 = utils.getSignalCatcher('SIGINT')
@@ -148,16 +150,16 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
                 loss_s_w_b1, lr, second_order=False).detach()
             # test on query set
             loss_q_m_b0, acc_q_m_b0, conf_b0 = model(
-              epi.q, params_b0, mask=None)
+                epi.q, params_b0, mask=None)
             loss_q_m_b1, acc_q_m_b1, conf_b1 = model(
-              epi.q, params_b1, mask=None)
+                epi.q, params_b1, mask=None)
           # record result
           result_dict.update({
-            'b0_loss_s_m': loss_s_m_b0, 'b0_acc_s_m': acc_s_m_b0,
-            'b0_loss_q_m': loss_q_m_b0, 'b0_acc_q_m': acc_q_m_b0,
-            'b1_loss_s_w': loss_s_w_b1, 'b1_acc_s_w': acc_s_w_b1,
-            'b1_loss_s_m': loss_s_m_b1, 'b1_acc_s_m': acc_s_m_b1,
-            'b1_loss_q_m': loss_q_m_b1, 'b1_acc_q_m': acc_q_m_b1,
+              'b0_loss_s_m': loss_s_m_b0, 'b0_acc_s_m': acc_s_m_b0,
+              'b0_loss_q_m': loss_q_m_b0, 'b0_acc_q_m': acc_q_m_b0,
+              'b1_loss_s_w': loss_s_w_b1, 'b1_acc_s_w': acc_s_w_b1,
+              'b1_loss_s_m': loss_s_m_b1, 'b1_acc_s_m': acc_s_m_b1,
+              'b1_loss_q_m': loss_q_m_b1, 'b1_acc_q_m': acc_q_m_b1,
           })
 
         # append to the dataframe
@@ -166,25 +168,28 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         # logging
         if k % log_steps == 0:
           msg = (
-            f'[epoch:{epoch:2d}|{mode}]'
-            f'[out:{i:4d}/{outer_steps}|in:{k:4d}/{inner_steps}][{lr:4.3f}]'
-            f'[{"|".join([f"{int(m*100):3d}" for m in mask.squeeze().tolist()])}]|'
-            # f'M>0.5:{(mask > 0.5).sum().tolist():2d}|W/S/Q:{epi.n_classes:2d}/'
-            f'{epi.s.n_samples:2d}/{epi.q.n_samples:2d}|'
-            # f'S:w.{loss_s_w.tolist():6.2f}({loss_s.mean().tolist():6.2f})/'
-            f'S:{loss_s_w.tolist(): 6.2f}/{acc_s_w.tolist()*100:6.2f}%|'
-            f'[ours]Q:{loss_q_m.tolist():4.2f}(m.{np.log(epi.n_classes):3.1f})/'
-            f'{acc_q_m.tolist()*100:6.2f}%/'
-            f'p:{conf[0].tolist():4.2f}/n:{conf[1].tolist():4.2f}|'
+              f'[epoch:{epoch:2d}|{mode}]'
+              f'[out:{i:3d}/{outer_steps}|in:{k:4d}/{inner_steps}][{lr:4.3f}]'
+              f'[{print_colorized_mask(mask)}]|'
+              # f'M>0.5:{(mask > 0.5).sum().tolist():2d}|W/S/Q:{epi.n_classes:2d}/'
+              f'{epi.s.n_samples:2d}/{epi.q.n_samples:2d}|'
+              # f'S:w.{loss_s_w.tolist():5.2f}({loss_s.mean().tolist():5.2f})/'
+              f'S:{loss_s_w.tolist(): 5.2f}/{acc_s_w.tolist()*100:5.1f}%|'
+              f'[ours]Q:{Color.GREEN}{loss_q_m.tolist():5.2f}{Color.END}'
+              f'(m.{np.log(epi.n_classes):3.1f})/'
+              f'{Color.RED}{acc_q_m.tolist()*100:5.1f}{Color.END}%/'
+              f'{print_confidence(conf, "2d")}|'
           )
           if not train or force_base:
             msg += (
-              # f'[b0]S:{loss_s_m_b0:6.2f}/{acc_s_m_b0*100:6.2f}%|'
-              f'[b0]Q:{loss_q_m_b0:6.2f}/{acc_q_m_b0*100:6.2f}%/'
-              f'p:{conf_b0[0].tolist():4.2f}/n:{conf_b0[1].tolist():4.2f}|'
-              # f'[b1]S:{loss_s_m_b1:6.2f}/{acc_s_m_b1*100:6.2f}%|'
-              f'[b1]Q:{loss_q_m_b1:6.2f}/{acc_q_m_b1*100:6.2f}%/'
-              f'p:{conf_b1[0].tolist():4.2f}/n:{conf_b1[0]:4.2f}|'
+                # f'[b0]S:{loss_s_m_b0:5.2f}/{acc_s_m_b0*100:5.2f}%|'
+                f'[b0]Q:{Color.GREEN}{loss_q_m_b0:5.2f}{Color.END}/'
+                f'{Color.RED}{acc_q_m_b0*100:5.1f}{Color.END}%/'
+                f'{print_confidence(conf_b0, "2d")}|'
+                # f'[b1]S:{loss_s_m_b1:5.2f}/{acc_s_m_b1*100:5.2f}%|'
+                f'[b1]Q:{Color.GREEN}{loss_q_m_b1:5.2f}{Color.END}/'
+                f'{Color.RED}{acc_q_m_b1*100:5.1f}{Color.END}%/'
+                f'{print_confidence(conf_b1, "2d")}|'
             )
           print(msg)
 
@@ -197,12 +202,18 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           sampler.detach_()
 
         # meta(outer) learning
-        if ((train and update_steps and k % update_steps == 0) or
-            (train and update_epochs and i % update_epochs == 0)):
+        if train and update_steps and k % update_steps == 0:
           outer_optim.step()
           sampler.zero_grad()
-          if update_epochs:
-            print(f'Meta-minibatch mode({meta_batchsize}): Sampler updated.')
+
+      if train and update_epochs and i % update_epochs == 0:
+        outer_optim.step()
+        sampler.zero_grad()
+        if update_epochs:
+          print(f'Meta-batchsize is {meta_batchsize}: Sampler updated.')
+
+      if train and update_steps:
+        print(f'Meta-batchsize is zero. Updating after every unrollings.')
 
       # tensorboard
       if train:

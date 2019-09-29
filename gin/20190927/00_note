@@ -1,0 +1,13 @@
+omniglot + quickdraw
+meta-batchsize & outer lr
+
+python train.py --gin 20190927/10_metabatch_0_lr_1e-2  # panel 0
+python train.py --gin 20190927/11_metabatch_0_lr_5e-3  # panel 1
+python train.py --gin 20190927/12_metabatch_0_lr_1e-3  # panel 2
+python train.py --gin 20190927/13_metabatch_0_lr_5e-4  # panel 3
+python train.py --gin 20190927/14_metabatch_0_lr_1e-4  # panel 9
+python train.py --gin 20190927/20_metabatch_3_lr_1e-2  # panel 4
+python train.py --gin 20190927/21_metabatch_3_lr_5e-3  # panel 5
+python train.py --gin 20190927/22_metabatch_3_lr_1e-3  # panel 6
+python train.py --gin 20190927/23_metabatch_3_lr_5e-4  # panel 7
+python train.py --gin 20190927/24_metabatch_3_lr_1e-4  # panel 10

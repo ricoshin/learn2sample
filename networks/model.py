@@ -126,9 +126,10 @@ class Model(nn.Module):
 
     if mask is None:
       conf = x.exp().max(dim=1)[0]  # confidence
-      conf_pos = conf[x.argmax(dim=1) == y]
-      conf_neg = conf[x.argmax(dim=1) != y]
-      return loss.mean(), acc.mean(), [conf_pos.mean(), conf_neg.mean()]
+      conf_pp = conf.gather(0, y).mean()  # for prediceted positive
+      conf_tp = conf[x.argmax(dim=1) == y].mean()  # for true positive
+      conf_fp = conf[x.argmax(dim=1) != y].mean()  # for false positive
+      return loss.mean(), acc.mean(), [conf_pp, conf_tp, conf_fp]
     # weighted average by mask
     else:
       loss = view_classwise(loss).mean(1, keepdim=True)

@@ -23,7 +23,7 @@ test/loop.outer_steps = 600
 train/loop.outer_lr = 0.0001
 train/loop.outer_optim = "adam"
 train/loop.unroll_steps = 5
-train/loop.meta_batchsize = 3
+train/loop.meta_batchsize = 0
 
 # sampler
 Sampler.embed_dim = 500

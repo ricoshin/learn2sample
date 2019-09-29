@@ -168,3 +168,22 @@ def prepare_dir(gin_path):
   shutil.copytree(os.path.abspath(os.path.curdir), code_path,
                   ignore=lambda src, names: {'.git', '__pycahe__', 'result'})
   return save_path
+
+
+def print_colorized_mask(mask):
+  out_str = []
+  reset = "\033[0m"
+  pallete = ['160', '166', '172', '178', '184', '190']
+  for m in mask.squeeze().tolist():
+    m *= 100
+    offset = 100 / len(pallete)
+    color = pallete[int(m // offset)]
+    out_str.append(f"\033[38;5;{color}m" + f'{int(m):3d}' + reset)
+    # import pdb; pdb.set_trace()
+  return "|".join(out_str)
+
+
+def print_confidence(conf, fmt='2d'):
+  ddd = fmt.join(['cf: {:', '}({:', '}/{:', '})']).format(
+    *[int(c.tolist() * 100) for c in conf])
+  return ddd
