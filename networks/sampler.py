@@ -26,6 +26,7 @@ class Preprocessor(nn.Module):
 
 @gin.configurable
 class EncoderInstance(nn.Module):
+  """Instance-level encoder."""
   def __init__(self, embed_dim):
     super(EncoderInstance, self).__init__()
     self.layers = nn.Sequential(
