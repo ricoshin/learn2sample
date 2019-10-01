@@ -59,7 +59,8 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
   # for result recordin
   result = Result()
-  writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
+  if save_path:
+    writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
 
   for i in range(1, outer_steps + 1):
     outer_loss = 0
@@ -73,7 +74,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         base_s = C(epi.s, device=2)
         base_q = C(epi.q, device=2)
       except Exception as ex:
-        print(ex) # may be OOM
+        print(ex)  # may be OOM
         continue
       view_classwise = epi.s.get_view_classwise_fn()
 
@@ -105,7 +106,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         if isinstance(mask_gen_out, tuple):
           # mask = C(torch.ones(epi.n_classes, 1)).detach()
           mask = mask_gen_out[0]
-          lr = inner_lr * mask_gen_out[1]
+          lr = mask_gen_out[1]
         else:
           mask = mask_gen_out
           lr = inner_lr
@@ -151,7 +152,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
             params_b0 = params_b0.sgd_step(
                 loss_s_m_b0, inner_lr, second_order=False).detach()
             params_b1 = params_b1.sgd_step(
-                loss_s_w_b1, lr.tolist(), second_order=False).detach()
+                loss_s_w_b1, lr, second_order=False).detach()
             # test on query set
             loss_q_m_b0, acc_q_m_b0, conf_b0 = model(
                 base_q, params_b0, mask=None)
@@ -227,7 +228,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         print(f'Meta-batchsize is zero. Updating after every unrollings.')
 
       # tensorboard
-      if train:
+      if save_path and train:
         step = (epoch * (outer_steps - 1)) + i
         res = Result(result[result['outer_step'] == i])
         loss = res.get_best_loss().mean()
@@ -237,7 +238,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         writer.add_scalars('Acc/train', {n: acc[n] for n in acc.index}, step)
 
       # dump figures
-      if i % fig_epochs == 0:
+      if save_path and i % fig_epochs == 0:
         epi.s.save_fig(f'imgs/support_{i}', save_path)
         epi.q.save_fig(f'imgs/query_{i}', save_path)
         masks.save_fig(f'imgs/masks_{i}', save_path)

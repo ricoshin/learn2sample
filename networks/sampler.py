@@ -145,13 +145,14 @@ class MaskGenerator(nn.Module):
 
     input_dim = embed_dim  # feature dim
     output_dim = 1  # mask only
-    input_dim = input_dim + 3 if input_more else input_dim  # mask and loss
+    input_dim = input_dim + 5 if input_more else input_dim  # mask and loss
     output_dim = output_dim + 1 if output_more else output_dim  # lr
 
     self.preprocess = Preprocessor()
     self.state_linear = nn.Linear(embed_dim, rnn_dim)
     self.gru = nn.GRUCell(input_dim, rnn_dim)
     self.out_linear = nn.Linear(rnn_dim, output_dim)
+    self.c = nn.Parameter(torch.tensor(-3.0))
     self.relu = nn.ReLU(inplace=True)
 
     if not sample_mode:
@@ -198,7 +199,6 @@ class MaskGenerator(nn.Module):
       x (torch.FloatTensor):
         class-wise mask layout.
         torch.Size([n_cls, 1])
-
     """
     # generate states from the features at the first loop.
     if self.state is None:
@@ -207,16 +207,26 @@ class MaskGenerator(nn.Module):
       state = self.state
 
     if self.input_more:
+      # detach from the graph
       mask = mask.detach()
-      loss = self.preprocess(loss / np.log(loss.size(0))).detach()  # scaling by log
-      x = torch.cat([x, mask, loss], dim=1)  # [n_cls , feature_dim + 2]
+      loss = loss.detach()
+
+      # averaged and relative loss
+      loss = loss / np.log(loss.size(0))  # scaling by log
+      loss_mean = loss.mean().repeat(loss.size(0), 1)  # averaged loss
+      loss_rel = loss - loss_mean  # relative loss
+      loss_mean = self.preprocess(loss_mean).detach()
+      loss_rel = self.preprocess(loss_rel).detach()
+
+      x = torch.cat([x, mask, loss_mean, loss_rel], dim=1)
+      # [n_cls , feature_dim + 1 + 2 + 2]
 
     self.state = self.gru(x, state)  # [n_cls , rnn_h_dim]
     x = self.out_linear(state)  # [n_cls , 1]
 
     if self.output_more:
       m = x[:, 0].unsqueeze(1)
-      lr = x[:, 1].mean().exp()
+      lr = (x[:, 1].mean() + self.c).exp()
     else:
       m = x
 

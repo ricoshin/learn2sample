@@ -5,7 +5,9 @@ Learning how to feed instance/classes/tasks efficiently using meta-learning fram
 
 + Python 3.3+.
 + PyTorch 1.0+.
-+ torchviz (optional)
++ gin (https://github.com/google/gin-config)
++ pandas
++ seaborn
 
 ## How to run:
 
@@ -18,6 +20,12 @@ With data & model parallelization:
 ```
 python train.py --gin test --parallel
 ```
+
+For debugging:
+```
+python train.py --gin debug --volatile
+```
+The flag --volatile will skip all the file savings.
 
 Note that gin file has to be specified.
 Result has directories will be made at ./result/{gin_file_path}
