@@ -10,6 +10,7 @@ import torch
 
 
 class MaskRecoder(object):
+  """A class for tracking"""
   def __init__(self):
     self._masks = []
 
@@ -38,6 +39,7 @@ class MaskRecoder(object):
 
 
 class Result(pd.DataFrame):
+  """Result recoder and plotter subclassing pd.DataFrame."""
   @property
   def model_names(self):
     return list(set([col.split('_')[0] for col in self.columns]))

@@ -23,6 +23,8 @@ tf.enable_eager_execution()
 
 
 class Dataset(object):
+  """Dataset class that should contain images, labels, and ids.
+  Support set or query set can be a proper candidate of Dataset."""
   def __init__(self, imgs, labels, ids, name='Dataset'):
     assert all([isinstance(t, torch.Tensor) for t in [imgs, labels, ids]])
     assert name in ['Dataset', 'Support', 'Query']
@@ -68,11 +70,11 @@ class Dataset(object):
       return x.view(self.n_classes * self.n_samples, *rest_dims)
     return view_elementwise_fn
 
-  def cuda(self):
-    self.imgs = self.imgs.cuda()
-    self.labels = self.labels.cuda()
-    # self.ids = self.ids.cuda()  # useless for now
-    return self
+  def cuda(self, device):
+    imgs = self.imgs.cuda(device)
+    labels = self.labels.cuda(device)
+    ids = self.ids # .cuda()  # useless for now
+    return Dataset(imgs, labels, ids)
 
   def numpy(self):
     """
@@ -175,7 +177,10 @@ class Dataset(object):
     plot.savefig(file_path)
     plot.close()
 
+
 class Episode(object):
+  """Collection of support and query set. Single episode for a task adaptation
+  can be wrapped with this class."""
   def __init__(self, support, query, n_total_classes):
     assert all([isinstance(set, Dataset) for set in [support, query]])
     self.s = support
@@ -194,10 +199,10 @@ class Episode(object):
     return Episode(*[set.offset_indices(offset_labels, offset_ids)
                    for set in self], self.n_total_classes)
 
-  def cuda(self):
-    self.s = self.s.cuda()
-    self.q = self.q.cuda()
-    return self
+  def cuda(self, device):
+    s = self.s.cuda(device)
+    q = self.q.cuda(device)
+    return Episode(s, q, self.n_total_classes)
 
   def numpy(self):
     """Returns tuple of numpy arrays.
@@ -255,6 +260,9 @@ class Episode(object):
 
 @gin.configurable
 class MetaDataset(object):
+  """MetaDataset(https://arxiv.org/abs/1903.03096.) converting tfrecord into
+  torch.Tensor. Reference: https://github.com/google-research/meta-dataset/blob/
+  master/Intro_to_Metadataset.ipynb """
   def __init__(self, datasets, split, fixed_ways=None, fixed_support=None,
                fixed_query=None, use_ontology=True):
     assert split in ['train', 'valid', 'test']
@@ -271,6 +279,7 @@ class MetaDataset(object):
     # Ontology setting
     use_bilevel_ontology_list = []
     use_dag_ontology_list = []
+
     for dataset in self.datasets:
       bilevel = dag = False
       if dataset == 'omniglot' and use_ontology:
@@ -358,6 +367,10 @@ class PseudoMetaDataset(object):
 
 @gin.configurable
 class MetaMultiDataset(object):
+  """A class for merging multiple MetaDataset into one.
+  Entire ways(number of classes) will be taken up by the multiple datasets in
+  equal propotion as much as possible.
+  """
   def __init__(self, multi_mode, datasets, split, fixed_ways=None,
                fixed_support=None, fixed_query=None, use_ontology=True):
     assert split in ['train', 'valid', 'test']

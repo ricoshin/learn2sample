@@ -5,18 +5,31 @@ from utils.torchviz import make_dot
 
 
 class Params(nn.Module):
+  """Parameters for Model(base-learner)."""
   def __init__(self, params_dict):
     super(Params, self).__init__()
     assert isinstance(params_dict, dict)
     self._dict = params_dict
+
+  def __repr__(self):
+    return f"Params({repr([p for p in self._dict.keys()])})"
+
+  def __getitem__(self, value):
+    if isinstance(value, int):
+      item = self.names()[value]
+    elif isinstance(value, str):
+      item = self._dict[value]
+    else:
+      raise KeyError(f'Wrong type!: {type(value)}')
+    return item
 
   @classmethod
   def from_module(cls, module):
     assert isinstance(module, nn.Module)
     return cls({k: v for k, v in module.named_parameters()})
 
-  def cuda(self):
-    self._dict = {k: v.cuda() for k, v in self._dict.items()}
+  def cuda(self, device):
+    self._dict = {k: v.cuda(device) for k, v in self._dict.items()}
     return self
 
   def clone(self):
@@ -28,8 +41,12 @@ class Params(nn.Module):
       self._dict[k].detach_().requires_grad_(True)
 
   def detach(self):
-    dict_ = {k: v.detach().requires_grad_(True) for k, v in self._dict.items()}
+    dict_ = {k: v.detach().requires_grad_(True)
+             for k, v in self._dict.items()}
     return Params(dict_)
+
+  def names(self):
+    return list(self._dict.keys())
 
   def sgd_step(self, loss, lr, detach_p=False, detach_g=False,
                second_order=False):
@@ -50,12 +67,18 @@ class Params(nn.Module):
 
 
 class Model(nn.Module):
+  """Base-learner Module. Its parameters cannot be updated with the graph
+  connected from outside world. To bypass this issue, parameters should not be
+  registered as normal parameters but keep their modularity independent to the
+  model. The forward pass has to be dealt with functionals by taking over those
+  parameters as a funtion argument."""
   def __init__(self, n_classes):
     super(Model, self).__init__()
-    self.ch = [3, 100, 150, 200, 250]
+    self.ch = [3, 64, 64, 64, 128]
     self.kn = [5, 5, 3, 3]
     self.n_classes = n_classes
     self.nll_loss = nn.NLLLoss(reduction='none')
+    self.n_group = 1
     # if self.n_classes is not None:
       # self.classifier = nn.Conv2d(ch[-1], self.n_classes, 3)
 
@@ -64,7 +87,7 @@ class Model(nn.Module):
     for i in range(len(self.ch) - 1):
       layers.update([
         [f'conv_{i}', nn.Conv2d(self.ch[i], self.ch[i + 1], self.kn[i])],
-        [f'bn_{i}', nn.BatchNorm2d(self.ch[i + 1], track_running_stats=False)],
+        [f'norm_{i}', nn.GroupNorm(self.n_group, self.ch[i + 1])],
         [f'relu_{i}', nn.ReLU(inplace=True)],
         [f'mp_{i}', nn.MaxPool2d(2, 2)],
       ])
@@ -76,9 +99,8 @@ class Model(nn.Module):
     p = p._dict
     for i in range(len(self.ch) - 1):
       x = F.conv2d(x, p[f'conv_{i}.weight'], p[f'conv_{i}.bias'])
-      x = F.batch_norm(
-          x, running_mean=None, running_var=None, training=True,
-          weight=p[f'bn_{i}.weight'], bias=p[f'bn_{i}.bias'],
+      x = F.group_norm(
+          x, self.n_group, weight=p[f'norm_{i}.weight'], bias=p[f'norm_{i}.bias'],
         )
       x = F.relu(x, inplace=True)
       x = F.max_pool2d(x, 2, 2)
@@ -90,14 +112,11 @@ class Model(nn.Module):
     Args:
       dataset (loader.Dataset):
         Support or query set(imgs/labels/ids).
+      params (networks.model.Params)
       mask (torch.FloatTensor):
         Classwise weighting overlay mask.
         Controls the effects from each classes.
         torch.Size([n_cls*n_ins, 1])
-      detach_params (bool):
-        This flag can be used to prevent from computing second derivative of
-        model parameters, while stil keeping those piplelines open heading to
-        the sampler parameters.
 
     Returns:
       loss (torch.FloatTensor): cross entropy loss.
@@ -127,14 +146,29 @@ class Model(nn.Module):
     if mask is None:
       conf = x.exp().max(dim=1)[0]  # confidence
       conf_pp = conf.gather(0, y).mean()  # for prediceted positive
-      conf_tp = conf[x.argmax(dim=1) == y].mean()  # for true positive
-      conf_fp = conf[x.argmax(dim=1) != y].mean()  # for false positive
+      id_tp = x.argmax(dim=1) == y
+      id_fp = x.argmax(dim=1) != y
+
+      if all(id_tp):
+        conf_fp = torch.tensor(0.0)
+        conf_tp = conf[id_tp].mean()
+      elif all(id_fp):
+        conf_tp = torch.tensor(0.0)
+        conf_fp = conf[id_fp].mean()
+      else:
+        conf_tp = conf[id_tp].mean()  # for true positive
+        conf_fp = conf[id_fp].mean()  # for false positive
+
+      if torch.isnan(conf_tp):
+        print('nan!')
+        import pdb; pdb.set_trace()
+
       return loss.mean(), acc.mean(), [conf_pp, conf_tp, conf_fp]
     # weighted average by mask
     else:
       loss = view_classwise(loss).mean(1, keepdim=True)
       acc = view_classwise(acc).mean(1, keepdim=True)
       mask_sum = mask.sum().detach()
-      loss_w = (loss * mask).sum() / mask_sum
-      acc_w = (acc * mask).sum() / mask_sum
+      loss_w = (loss * mask).sum() / mask_sum  # weighted averaged loss
+      acc_w = (acc * mask).sum() / mask_sum  # weighted averaged acc
       return loss, acc, loss_w, acc_w

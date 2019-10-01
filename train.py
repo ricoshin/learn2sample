@@ -15,8 +15,12 @@ C = utils.getCudaManager('default')
 parser = argparse.ArgumentParser(description='Learning to sample')
 parser.add_argument('--cpu', action='store_true', help='disable CUDA')
 parser.add_argument('--volatile', action='store_true', help='no saved files.')
-parser.add_argument('--gin', type=str, default='omniglot',
+parser.add_argument('--gin', type=str, default='test',
                     help='gin filename to load configuration.')
+parser.add_argument('--parallel', action='store_true',
+                    help='use torh.nn.DataParallel')
+parser.add_argument('--visible_devices', nargs='+', type=int, default=None,
+                    help='for the environment variable: CUDA_VISIBLE_DEVICES')
 
 
 @gin.configurable
@@ -25,7 +29,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   best_acc = 0
   no_improvement = 0
   writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
-  sampler = C(Sampler())
+  sampler = C(Sampler(), parallel=True, device=0)
   for i in range(1, meta_epoch + 1):
     # meta train
     sampler, result_train = train_loop(
@@ -57,7 +61,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
 
   # meta test
   _, result_test = test_loop(
-      sampler=C(Sampler.load(save_path)), save_path=save_path)
+      sampler=C(Sampler.load(save_path), device_id=0), save_path=save_path)
 
   result_test.save_to_csv('records/test', save_path)
   result_test.save_final_lineplot('loss_q_m', save_path)
@@ -76,6 +80,9 @@ if __name__ == '__main__':
   print('Start_of_program.')
   args = parser.parse_args()
   C.set_cuda(not args.cpu and torch.cuda.is_available())
+  if args.parallel:
+    C.set_visible_devices(args.visible_devices)
+    C.set_parallel()
   # gin
   gin_path = os.path.join('gin', args.gin + '.gin')
   gin.parse_config_file(gin_path)

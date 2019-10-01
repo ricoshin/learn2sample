@@ -10,6 +10,8 @@ from torch.nn import functional as F
 
 
 class Preprocessor(nn.Module):
+  """To preprocess loss values that will be used as rnn inputs.
+  Logarithm is supposed to suppress too large loss values."""
   def __init__(self, p=10.0, eps=1e-6):
     super(Preprocessor, self).__init__()
     self.eps = eps
@@ -19,7 +21,6 @@ class Preprocessor(nn.Module):
     indicator = (x.abs() > math.exp(-self.p)).float()
     x1 = (x.abs() + self.eps).log() / self.p * indicator - (1 - indicator)
     x2 = x.sign() * indicator + math.exp(self.p) * x * (1 - indicator)
-
     return torch.cat((x1, x2), 1)
 
 
@@ -29,10 +30,10 @@ class EncoderInstance(nn.Module):
     super(EncoderInstance, self).__init__()
     self.layers = nn.Sequential(
         nn.Conv2d(3, embed_dim//2, 5, 3),  # [n_cls*n_ins, 16, 10, 10]
-        # nn.BatchNorm2d(16),
+        # nn.BatchNorm2d(embed_dim//2),
         nn.ReLU(True),
         nn.Conv2d(embed_dim//2, embed_dim, 3, 3),  # [n_cls*n_ins, 32, 3, 3]
-        # nn.BatchNorm2d(32),
+        # nn.BatchNorm2d(embed_dim),
         nn.ReLU(True),
         nn.MaxPool2d(3),  # torch.Size([n_cls*n_ins, 32])
     )
@@ -58,6 +59,7 @@ class EncoderInstance(nn.Module):
 
 @gin.configurable
 class DecoderInstance(nn.Module):
+  """Can be used for autoencoder pretraining"""
   def __init__(self, embed_dim):
     super(DecoderInstance, self).__init__()
     self.layers = nn.Sequential(
@@ -78,15 +80,16 @@ class DecoderInstance(nn.Module):
 
 @gin.configurable
 class EncoderClass(nn.Module):
+  """Class-level encoder using Deep set."""
   def __init__(self, embed_dim):
     super(EncoderClass, self).__init__()
     self.bn = nn.BatchNorm1d(embed_dim, affine=False)
-    self.rho = nn.Linear(embed_dim, embed_dim)
+    # self.rho = nn.Linear(embed_dim, embed_dim)
     self.sigmoid = nn.Sigmoid()
     self.tanh = nn.Tanh()
     self.relu = nn.ReLU(True)
-    self.lamb = nn.Parameter(torch.tensor([.9]))
-    self.gamm = nn.Parameter(torch.tensor([.1]))
+    # self.lamb = nn.Parameter(torch.tensor([.9]))
+    # self.gamm = nn.Parameter(torch.tensor([.1]))
     self.max_pool = nn.MaxPool1d(embed_dim)
 
   def forward(self, x):
@@ -131,6 +134,7 @@ class EncoderClass(nn.Module):
 
 @gin.configurable
 class MaskGenerator(nn.Module):
+  """GRU-based mask generator."""
   def __init__(self, embed_dim, rnn_dim, sample_mode, input_more, output_more,
                temp):
     super(MaskGenerator, self).__init__()
@@ -144,7 +148,7 @@ class MaskGenerator(nn.Module):
     output_dim = output_dim + 1 if output_more else output_dim  # lr
 
     self.preprocess = Preprocessor()
-    self.state_linear = nn.Linear(embed_dim, embed_dim)
+    self.state_linear = nn.Linear(embed_dim, rnn_dim)
     self.gru = nn.GRUCell(input_dim, rnn_dim)
     self.out_linear = nn.Linear(rnn_dim, output_dim)
     self.relu = nn.ReLU(inplace=True)
@@ -228,6 +232,7 @@ class MaskGenerator(nn.Module):
 
 @gin.configurable
 class Sampler(nn.Module):
+  """A Sampler module incorporating all other submodules."""
   _save_name = 'meta.params'
 
   def __init__(self, embed_dim, rnn_dim):

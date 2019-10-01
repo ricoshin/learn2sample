@@ -68,9 +68,12 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
     for j, epi in enumerate(metadata.loader(n_batches=1), 1):
       result_dict = OrderedDict()
       try:
-        epi.s = C(epi.s)
-        epi.q = C(epi.q)
-      except:  # OOM
+        epi.s = C(epi.s, device=0)
+        epi.q = C(epi.q, device=1)
+        base_s = C(epi.s, device=2)
+        base_q = C(epi.q, device=2)
+      except Exception as ex:
+        print(ex) # may be OOM
         continue
       view_classwise = epi.s.get_view_classwise_fn()
 
@@ -81,16 +84,15 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
       # initialize
       model = Model(epi.n_classes)
-      params = C(model.get_init_params())
-      mask = loss_s = C(sampler.mask_gen.init_mask(epi.n_classes))
+      params = C(model.get_init_params(), device=0)
+      mask = loss_s = C(sampler.mask_gen.init_mask(epi.n_classes), device=0)
 
       if not train or force_base:
         """baseline 1: naive single task learning
            baseline 2: single task learning with the same loss scale
         """
-        params_b0 = params.clone().detach()  # baseline 1
-        params_b1 = params.clone().detach()  # baseline 2
-        # import pdb; pdb.set_trace()
+        params_b0 = C(params.clone(), device=2)  # baseline 1
+        params_b1 = C(params.clone(), device=2)  # baseline 2
 
       for k in range(1, inner_steps + 1):
         debug_1 = sig_1.is_active()
@@ -103,7 +105,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         if isinstance(mask_gen_out, tuple):
           # mask = C(torch.ones(epi.n_classes, 1)).detach()
           mask = mask_gen_out[0]
-          lr = mask_gen_out[1]
+          lr = inner_lr * mask_gen_out[1]
         else:
           mask = mask_gen_out
           lr = inner_lr
@@ -124,7 +126,9 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           params = params.sgd_step(
               loss_s_w, lr, second_order=True)
           # test on query set
+          params = C(params, device=1)
           loss_q_m, acc_q_m, conf = model(epi.q, params, mask=None)
+          params = C(params, device=0)
 
         # record result
         result_dict.update({
@@ -136,8 +140,8 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
         if not train or force_base:
           # feed support set (baseline)
-          loss_s_m_b0, acc_s_m_b0, _ = model(epi.s, params_b0, None)
-          loss_s_m_b1, acc_s_m_b1, _ = model(epi.s, params_b1, None)
+          loss_s_m_b0, acc_s_m_b0, _ = model(base_s, params_b0, None)
+          loss_s_m_b1, acc_s_m_b1, _ = model(base_s, params_b1, None)
           # manaul masking (only for baseline 1)
           loss_s_w_b1 = loss_s_m_b1 * mask.mean().detach()
           acc_s_w_b1 = acc_s_m_b1 * mask.mean().detach()
@@ -147,12 +151,12 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
             params_b0 = params_b0.sgd_step(
                 loss_s_m_b0, inner_lr, second_order=False).detach()
             params_b1 = params_b1.sgd_step(
-                loss_s_w_b1, lr, second_order=False).detach()
+                loss_s_w_b1, lr.tolist(), second_order=False).detach()
             # test on query set
             loss_q_m_b0, acc_q_m_b0, conf_b0 = model(
-                epi.q, params_b0, mask=None)
+                base_q, params_b0, mask=None)
             loss_q_m_b1, acc_q_m_b1, conf_b1 = model(
-                epi.q, params_b1, mask=None)
+                base_q, params_b1, mask=None)
           # record result
           result_dict.update({
               'b0_loss_s_m': loss_s_m_b0, 'b0_acc_s_m': acc_s_m_b0,
@@ -170,9 +174,16 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           msg = (
               f'[epoch:{epoch:2d}|{mode}]'
               f'[out:{i:3d}/{outer_steps}|in:{k:4d}/{inner_steps}][{lr:4.3f}]'
-              f'[{print_colorized_mask(mask)}]|'
+              f'[{print_colorized_mask(mask, 0.0, 1.0, 100, "2d")}]|'
+              # f'[epoch:{epoch:2d}|{mode}]'
+              # f'[out:{i:3d}/{outer_steps}|in:{k:4d}/{inner_steps}][{lr:4.3f}]'
+              # f'[{print_colorized_mask(acc_s, 0.0, 1.0, 100, "4d")}]|\n'
+              # f'[epoch:{epoch:2d}|{mode}]'
+              # f'[out:{i:3d}/{outer_steps}|in:{k:4d}/{inner_steps}][{lr:4.3f}]'
+              # f'[{print_colorized_mask(loss_s, 0.0, 2.3, 1.0, "4.2f", [40])}]|'
+
               # f'M>0.5:{(mask > 0.5).sum().tolist():2d}|W/S/Q:{epi.n_classes:2d}/'
-              f'{epi.s.n_samples:2d}/{epi.q.n_samples:2d}|'
+              # f'{epi.s.n_samples:2d}/{epi.q.n_samples:2d}|'
               # f'S:w.{loss_s_w.tolist():5.2f}({loss_s.mean().tolist():5.2f})/'
               f'S:{loss_s_w.tolist(): 5.2f}/{acc_s_w.tolist()*100:5.1f}%|'
               f'[ours]Q:{Color.GREEN}{loss_q_m.tolist():5.2f}{Color.END}'
