@@ -11,12 +11,12 @@ Learning how to feed instance/classes/tasks efficiently using meta-learning fram
 
 Test code (referring to ./gin/test.gin):
 ```
-python main.py --gin test
+python train.py --gin test
 ```
 
 With data & model parallelization:
 ```
-python main.py --gin test --parallel
+python train.py --gin test --parallel
 ```
 
 Note that gin file has to be specified.
