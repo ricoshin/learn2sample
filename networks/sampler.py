@@ -60,7 +60,7 @@ class EncoderInstance(nn.Module):
 
 @gin.configurable
 class DecoderInstance(nn.Module):
-  """Can be used for autoencoder pretraining"""
+  """Can be used for autoencoder pretraining."""
   def __init__(self, embed_dim):
     super(DecoderInstance, self).__init__()
     self.layers = nn.Sequential(
