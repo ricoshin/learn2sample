@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
+from loader.episode import Episode
+from nn.output import ModelOutput
 from tensorboardX import SummaryWriter
 
 _tensor_managers = {}
@@ -31,6 +33,8 @@ def getSignalCatcher(name):
 
 
 class SignalCatcher(object):
+  """Signal catcher for debugging."""
+
   def __init__(self, name):
     self.name = name
     self._signal = getattr(signal, name)
@@ -75,13 +79,17 @@ class MyDataParallel(torch.nn.DataParallel):
   """To access the attributes after warpping a module with DataParallel."""
 
   def __getattr__(self, name):
-    try:
-      return super().__getattr__(name)
-    except AttributeError:
-      return getattr(self.module, name)
+    if name == 'module':
+      # to avoid recursion
+      return self.__dict__['_modules']['module']
+    return getattr(self.module, name)
 
 
 class CUDAManager(object):
+  """Global CUDA manager. Ease the pain of carrying cuda config around all over
+     the modules.
+  """
+
   def __init__(self, cuda=None, name='default'):
     self.cuda = cuda
     self.name = name
@@ -94,6 +102,7 @@ class CUDAManager(object):
     print(f"Global cuda manager '{self.name}' is set to {self.cuda}.")
     if cuda and manual_seed:
       torch.cuda.manual_seed(manual_seed)
+      torch.backends.cudnn.deterministic = True
     return self
 
   def set_visible_devices(self, visible_devices=None):
@@ -136,7 +145,7 @@ class CUDAManager(object):
                       "by calling CUDAManager.set_cuda(boolean)")
     obj = obj.cuda(device if self.parallel else 0) if self.cuda else obj
     if isinstance(obj, torch.nn.Module) and self.parallel and parallel:
-      obj = MyDataParallel(obj, )
+      obj = MyDataParallel(obj)
     return obj
 
 
@@ -218,20 +227,44 @@ def prepare_dir(gin_path):
   return save_path
 
 
-def print_colorized_mask(mask, min, max, multi=1.0, fmt='3d',
-                         colors=[160, 166, 172, 178, 184, 190]):
-  out_str = []
-  reset = "\033[0m"
-  for m in mask.squeeze().tolist():
-    m *= multi
-    offset = (max - min) * multi / len(colors)
-    color = colors[int(m // offset) if int(m // offset) < len(colors) else -1]
-    out_str.append(f"\033[38;5;{str(color)}m" + "%%%s" % fmt % int(m) + reset)
-    # import pdb; pdb.set_trace()
-  return "|".join(out_str)
+class Printer():
+  """Collection of printing functions."""
+  @staticmethod
+  def step_info(
+          epoch, mode, out_step_cur, out_step_max, in_step_cur, in_step_max, lr):
+    return (f'[{mode}|epoch:{epoch:2d}]'
+            f'[out:{out_step_cur:3d}/{out_step_max}|'
+            f'in:{in_step_cur:4d}/{in_step_max}][{lr:4.3f}]')
 
+  @staticmethod
+  def way_shot_query(episode):
+    assert isinstance(episode, Episode)
+    return (f'W/S/Q:{episode.n_classes:2d}/{episode.s.n_samples:2d}/'
+            f'{episode.q.n_samples:2d}|')
 
-def print_confidence(conf, fmt='2d'):
-  ddd = fmt.join(['cf: {:', '}({:', '}/{:', '})']).format(
-      *[int(c.tolist() * 100) for c in conf])
-  return ddd
+  @staticmethod
+  def colorized_mask(mask, min=0.0, max=1.0, multi=100, fmt='3d', vis_num=30,
+                     colors=[160, 166, 172, 178, 184, 190]):
+    out_str = []
+    reset = "\033[0m"
+    masks = mask.squeeze().tolist()
+    if len(masks) > vis_num:
+      id_offset = len(masks) / vis_num
+    else:
+      id_offset = 1
+      vis_num = len(masks)
+    for i in range(vis_num):
+      m = masks[int(i * id_offset)] * multi
+      color_offset = (max - min) * multi / len(colors)
+      color = colors[int(m // color_offset) if int(m // color_offset)
+                     < len(colors) else -1]
+      out_str.append(f"\033[38;5;{str(color)}m" +
+                     "%%%s" % fmt % int(m) + reset)
+      # import pdb; pdb.set_trace()
+    return f'[{"|".join(out_str)}]'
+
+  @staticmethod
+  def outputs(outputs, print_conf):
+    assert isinstance(outputs, (list, tuple))
+    assert(all([isinstance(out, ModelOutput) for out in outputs]))
+    return "".join([out.to_text(print_conf) for out in outputs])

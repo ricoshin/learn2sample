@@ -1,6 +1,6 @@
 import math
 import os
-
+import sys
 import gin
 import numpy as np
 import torch
@@ -24,7 +24,6 @@ class Preprocessor(nn.Module):
     return torch.cat((x1, x2), 1)
 
 
-@gin.configurable
 class EncoderInstance(nn.Module):
   """Instance-level encoder."""
   def __init__(self, embed_dim):
@@ -58,7 +57,6 @@ class EncoderInstance(nn.Module):
     return x.squeeze()
 
 
-@gin.configurable
 class DecoderInstance(nn.Module):
   """Can be used for autoencoder pretraining."""
   def __init__(self, embed_dim):
@@ -79,7 +77,6 @@ class DecoderInstance(nn.Module):
     return x
 
 
-@gin.configurable
 class EncoderClass(nn.Module):
   """Class-level encoder using Deep set."""
   def __init__(self, embed_dim):
@@ -93,17 +90,23 @@ class EncoderClass(nn.Module):
     # self.gamm = nn.Parameter(torch.tensor([.1]))
     self.max_pool = nn.MaxPool1d(embed_dim)
 
-  def forward(self, x):
+  def forward(self, x, n_classes):
     """
     Args:
       x (torch.FloatTensor):
         instance-wise representation(class dim added).
         torch.Size([n_cls, n_ins, feature_dim])
+      n_classes (int):
+        number of classes.
     Returns:
       x (torch.FloatTensor):
         class-wise representation.
         torch.Size([n_cls, feature_dim])
     """
+    n_total = x.size(0)
+    embed_dim = x.size(1)
+    n_samples = int(n_total / n_classes)
+    x = x.view(n_classes, n_samples, embed_dim)
     # x = x.view(sup.n_classes, sup.n_samples, -1)
     # Permutation invariant set encoding
     x = x.mean(dim=1)  # [n_cls , feature_dim]
@@ -132,16 +135,69 @@ class EncoderClass(nn.Module):
     return model
 
 
+class EncoderIntegrated(nn.Module):
+  def __init__(self, embed_dim, mask_mode):
+    super(EncoderIntegrated, self).__init__()
+    assert mask_mode in ['class', 'sample']
+    self.mask_mode = mask_mode
+    self.enc_ins = EncoderInstance(embed_dim)
+    self.enc_cls = EncoderClass(embed_dim)
+
+  def forward(self, x, n_classes):
+    assert isinstance(x, torch.Tensor)
+    assert isinstance(n_classes, int)
+    x = self.enc_ins(x)
+    if self.mask_mode == 'class':
+      x = self.enc_cls(x, n_classes)
+    return x
+
+
+class Mask(nn.Module):
+  def __init__(self, mask, n_classes, n_samples, mask_mode):
+    super(Mask, self).__init__()
+    assert isinstance(mask, torch.Tensor)
+    assert isinstance(n_classes, int)
+    assert isinstance(n_samples, int)
+    assert mask_mode in ['class', 'sample']
+    self._mask = mask
+    self._n_classes = n_classes
+    self._n_samples = n_samples
+    self._mask_mode = mask_mode
+
+  def detach(self):
+    return Mask(
+      self._mask.detach(), self._n_classes, self._n_samples, self._mask_mode)
+
+  def apply(self, x):
+    assert isinstance(x, torch.Tensor)
+    if self._mask_mode == 'class':
+      assert x.size(0) == self._n_classes * self._n_samples
+      rest_dims = [x.size(i) for i in range(1, len(x.shape))]
+      x = x.view(self._n_classes, self._n_samples, *rest_dims)
+    return x * self._mask
+
+  def mean(self, *args, **kwargs):
+    return self._mask.mean(*args, **kwargs)
+
+  def masked_mean(self, x):
+    return self.apply(x).mean()
+
+  def weighted_masked_mean(self, x):
+    return self.apply(x).sum() / self._mask.sum().detach()
+
 
 @gin.configurable
 class MaskGenerator(nn.Module):
   """GRU-based mask generator."""
-  def __init__(self, embed_dim, rnn_dim, sample_mode, input_more, output_more,
-               temp):
+  def __init__(self, embed_dim, rnn_dim, mask_mode, sample_mode, input_more,
+               output_more, temp):
     super(MaskGenerator, self).__init__()
+    assert mask_mode in ['class', 'sample']
     self.sample_mode = sample_mode
+    self.mask_mode = mask_mode
     self.input_more = input_more
     self.output_more = output_more
+    self._mask_gen_fn = None
 
     input_dim = embed_dim  # feature dim
     output_dim = 1  # mask only
@@ -160,29 +216,20 @@ class MaskGenerator(nn.Module):
     self.temp = temp
     self.state = None
 
-    # self._state_init = nn.Parameter(torch.randn(1, 32))
-
-  # @property
-  # def state(self):
-  #   if self._state is None:
-  #     raise RuntimeError("Sampler has never been initialized. "
-  #       "Run Sampler.initialize() before feeding the first data.")
-  #   else:
-  #     return self._state
-
-  # @state.setter
-  # def state(self, value):
-  #   # TO DO: check type, dimension
-  #   self._state = value
-
-  # def init_state(self, n_batches):
-  #   return self._state_init.repeat([n_batches, 1])
-
   def detach_(self):
     self.state.detach_()
 
-  def init_mask(self, n_batches):
+  def init_mask(self, n_classes, n_samples):
+    if self.mask_mode == 'class':
+      n_batches = n_classes
+    elif self.mask_mode == 'sample':
+      n_batches = n_classes * n_samples
+    else:
+      raise Exception(f'Unknown mask_mode: {self.mask_mode}')
     return torch.zeros(n_batches, 1)
+
+  def generate_mask(self, tensor, n_classes, mask_mode):
+    assert isinstance(mask_mode in ['class', 'sample'])
 
   def init_loss(self, n_batches):
     return self.init_mask(n_batches)
@@ -225,20 +272,20 @@ class MaskGenerator(nn.Module):
     x = self.out_linear(state)  # [n_cls , 1]
 
     if self.output_more:
-      m = x[:, 0].unsqueeze(1)
+      mask = x[:, 0].unsqueeze(1)
       lr = (x[:, 1].mean() + self.c).exp()
     else:
-      m = x
+      mask = x
 
     if self.sample_mode:
-      m = RelaxedBernoulli(self.temp, m).rsample()
+      mask = RelaxedBernoulli(self.temp, mask).rsample()
     else:
-      m = self.sigmoid(m / self.temp)  # 0.2
+      mask = self.sigmoid(mask / self.temp)  # 0.2
 
     if self.output_more:
-      return m, lr
+      return mask, lr
     else:
-      return m  # [n_cls , 1]
+      return mask, None  # [n_cls , 1]
 
 
 @gin.configurable
@@ -246,21 +293,24 @@ class Sampler(nn.Module):
   """A Sampler module incorporating all other submodules."""
   _save_name = 'meta.params'
 
-  def __init__(self, embed_dim, rnn_dim):
+  def __init__(self, embed_dim, rnn_dim, mask_mode):
     super(Sampler, self).__init__()
-    self.enc_ins = EncoderInstance(embed_dim)
-    self.enc_cls = EncoderClass(embed_dim)
-    self.mask_gen = MaskGenerator(embed_dim, rnn_dim)
+    # self.enc_ins = EncoderInstance(embed_dim)
+    # self.enc_cls = EncoderClass(embed_dim)
+    self.encoder = EncoderIntegrated(embed_dim, mask_mode)
+    self.mask_gen = MaskGenerator(embed_dim, rnn_dim, mask_mode)
 
   def detach_(self):
     self.mask_gen.detach_()
 
   def save(self, save_path=None):
     if save_path:
+      # sys.setrecursionlimit(10000)  # workaround for recursion error
       file_path = os.path.join(save_path, Sampler._save_name)
       with open(file_path, 'wb') as f:
         torch.save(self.state_dict(), f)
       print(f'Saved meta-learned parameters as: {file_path}')
+    return self
 
   @classmethod
   def load(cls, load_path):
@@ -275,9 +325,3 @@ class Sampler(nn.Module):
   @property
   def dec_ins(self):
     return DecoderInstance()
-
-  # def sgd_step(self, loss, lr, second_order=False):
-  #   # names, params = list(zip(named_params))
-  #   grads = torch.autograd.grad(loss, self.parameters())
-  #   for param, grad in zip(self.parameters(), grads):
-  #     param.requires_grad_(False).copy_(param - lr * grad)

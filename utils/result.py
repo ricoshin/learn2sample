@@ -15,7 +15,6 @@ class MaskRecoder(object):
     self._masks = []
 
   def append(self, mask):
-    assert isinstance(mask, torch.Tensor)
     self._masks.append(mask.squeeze().tolist())
 
   def plot(self, every_n_rows):
@@ -66,7 +65,7 @@ class Result(pd.DataFrame):
 
   def get_best_loss(self):
     columns = [col for col in self.columns
-               if '_'.join(col.split('_')[1:]) == 'loss_q_m']
+               if '_'.join(col.split('_')[1:]) == 'q_loss']
     new_columns = [col.split('_')[0] for col in columns]
     best_loss = self.groupby(['outer_step'], sort=True)[columns].min()
     best_loss.columns = new_columns
@@ -74,7 +73,7 @@ class Result(pd.DataFrame):
 
   def get_best_acc(self):
     columns = [col for col in self.columns
-               if '_'.join(col.split('_')[1:]) == 'acc_q_m']
+               if '_'.join(col.split('_')[1:]) == 'q_acc']
     new_columns = [col.split('_')[0] for col in columns]
     best_acc = self.groupby(['outer_step'], sort=True)[columns].max()
     best_acc.columns = new_columns

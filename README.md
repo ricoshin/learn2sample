@@ -29,3 +29,7 @@ The flag --volatile will skip all the file savings.
 
 Note that gin file has to be specified.
 Result has directories will be made at ./result/{gin_file_path}
+
+SIGINT(^C) and SIGTSTOP(^Z) will be intercepted by utils.utils.SignalCatcher.
+Both will be used for debugging or log control.
+Use SIGQUIT(^\) for terminate the process.

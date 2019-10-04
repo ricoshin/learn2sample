@@ -1,14 +1,16 @@
 import argparse
 import os
 import pdb
+import sys
 
 import gin
 import torch
 from loop import loop
-from networks.sampler import Sampler
+from nn.sampler import Sampler
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.utils import prepare_dir
+
 
 C = utils.getCudaManager('default')
 
@@ -25,19 +27,24 @@ parser.add_argument('--visible_devices', nargs='+', type=int, default=None,
 
 @gin.configurable
 def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
-               save_path):
+               save_path, outer_optim, outer_lr, parallel):
   best_acc = 0
   no_improvement = 0
+
+  sampler = C(Sampler(), parallel=parallel, device=0)
+  outer_optim = {'sgd': 'SGD', 'adam': 'Adam'}[outer_optim.lower()]
+  outer_optim = getattr(torch.optim, outer_optim)(
+      sampler.parameters(), lr=outer_lr)
+
   if save_path:
     writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
-  sampler = C(Sampler(), parallel=True, device=0)
   for i in range(1, meta_epoch + 1):
     # meta train
     sampler, result_train = train_loop(
-      sampler=sampler, epoch=i, save_path=save_path)
+        sampler=sampler, outer_optim=outer_optim, epoch=i, save_path=save_path)
     # meta valid
     _, result_valid = valid_loop(
-      sampler=sampler, epoch=i, save_path=save_path)
+        sampler=sampler, epoch=i, save_path=save_path)
 
     loss = result_valid.get_best_loss().mean()
     acc = result_valid.get_best_acc().mean()
@@ -51,7 +58,9 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
     # update the best model
     if acc['ours'] > best_acc:
       if save_path:
-        sampler.save(save_path)
+        # TODO: find better way
+        #   why recursion error occurs if model is on GPU?
+        C(sampler.cpu().save(save_path), parallel, device=0)
       else:
         best_sampler = sampler
       best_acc = acc['ours']
@@ -65,7 +74,8 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
         print(f'Early stop counter: {no_improvement}/{tolerance}.')
 
   if save_path:
-    sampler = C(Sampler.load(save_path), device_id=0)
+    sampler = C(Sampler.load(save_path), device=0)
+    import pdb; pdb.set_trace()
   else:
     sampler = best_sampler
 
@@ -99,5 +109,5 @@ if __name__ == '__main__':
   # prepare dir
   save_path = prepare_dir(gin_path) if not args.volatile else None
   # main loop
-  meta_train(save_path=save_path)
+  meta_train(save_path=save_path, parallel=args.parallel)
   print('End_of_program.')
