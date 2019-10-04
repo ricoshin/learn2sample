@@ -152,40 +152,6 @@ class EncoderIntegrated(nn.Module):
     return x
 
 
-class Mask(nn.Module):
-  def __init__(self, mask, n_classes, n_samples, mask_mode):
-    super(Mask, self).__init__()
-    assert isinstance(mask, torch.Tensor)
-    assert isinstance(n_classes, int)
-    assert isinstance(n_samples, int)
-    assert mask_mode in ['class', 'sample']
-    self._mask = mask
-    self._n_classes = n_classes
-    self._n_samples = n_samples
-    self._mask_mode = mask_mode
-
-  def detach(self):
-    return Mask(
-      self._mask.detach(), self._n_classes, self._n_samples, self._mask_mode)
-
-  def apply(self, x):
-    assert isinstance(x, torch.Tensor)
-    if self._mask_mode == 'class':
-      assert x.size(0) == self._n_classes * self._n_samples
-      rest_dims = [x.size(i) for i in range(1, len(x.shape))]
-      x = x.view(self._n_classes, self._n_samples, *rest_dims)
-    return x * self._mask
-
-  def mean(self, *args, **kwargs):
-    return self._mask.mean(*args, **kwargs)
-
-  def masked_mean(self, x):
-    return self.apply(x).mean()
-
-  def weighted_masked_mean(self, x):
-    return self.apply(x).sum() / self._mask.sum().detach()
-
-
 @gin.configurable
 class MaskGenerator(nn.Module):
   """GRU-based mask generator."""
