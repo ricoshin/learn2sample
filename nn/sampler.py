@@ -7,6 +7,10 @@ import torch
 import torch.nn as nn
 from torch.distributions.relaxed_bernoulli import RelaxedBernoulli
 from torch.nn import functional as F
+from utils import utils
+from utils.utils import MyDataParallel, ParallelizableModule
+
+C = utils.getCudaManager('default')
 
 
 class Preprocessor(nn.Module):
@@ -24,18 +28,32 @@ class Preprocessor(nn.Module):
     return torch.cat((x1, x2), 1)
 
 
-class EncoderInstance(nn.Module):
+class EncoderInstance(ParallelizableModule):
   """Instance-level encoder."""
   def __init__(self, embed_dim):
     super(EncoderInstance, self).__init__()
     self.layers = nn.Sequential(
-        nn.Conv2d(3, embed_dim//2, 5, 3),  # [n_cls*n_ins, 16, 10, 10]
-        # nn.BatchNorm2d(embed_dim//2),
+        nn.Conv2d(3, 200, 3, 2),  # [n_cls*n_ins, 200, 30, 30]
+        nn.BatchNorm2d(200),
         nn.ReLU(True),
-        nn.Conv2d(embed_dim//2, embed_dim, 3, 3),  # [n_cls*n_ins, 32, 3, 3]
-        # nn.BatchNorm2d(embed_dim),
+        nn.Conv2d(200, 300, 3, 2),  # [n_cls*n_ins, 300, 14, 14]
+        nn.BatchNorm2d(300),
         nn.ReLU(True),
-        nn.MaxPool2d(3),  # torch.Size([n_cls*n_ins, 32])
+        nn.Conv2d(300, 300, 3, 2),  # [n_cls*n_ins, 300, 12, 12]
+        nn.BatchNorm2d(300),
+        nn.ReLU(True),
+        nn.Conv2d(300, 400, 3, 2),  # [n_cls*n_ins, 500, 5, 5]
+        nn.BatchNorm2d(400),
+        nn.ReLU(True),
+        nn.Conv2d(400, 500, 4, 1),
+        # nn.MaxPool2d(3),  # torch.Size([n_cls*n_ins, 32])
+        # nn.Conv2d(3, embed_dim//2, 5, 3),  # [n_cls*n_ins, 16, 10, 10]
+        # # nn.BatchNorm2d(embed_dim//2),
+        # nn.ReLU(True),
+        # nn.Conv2d(embed_dim//2, embed_dim, 3, 3),  # [n_cls*n_ins, 32, 3, 3]
+        # # nn.BatchNorm2d(embed_dim),
+        # nn.ReLU(True),
+        # nn.MaxPool2d(3),  # torch.Size([n_cls*n_ins, 32])
     )
 
   def forward(self, x):
@@ -49,11 +67,12 @@ class EncoderInstance(nn.Module):
         instance-wise representation.
         torch.Size([n_cls*n_ins, feature_dim])
     """
-    x = F.interpolate(x, size=32, mode='area')
+    # x = F.interpolate(x, size=32, mode='area')
     self.resized = x
     # torch.Size([n_cls*n_ins, 3, 32, 32])
     for layer in self.layers:
       x = layer(x)
+      # import pdb; pdb.set_trace()
     return x.squeeze()
 
 
@@ -153,7 +172,7 @@ class EncoderIntegrated(nn.Module):
 
 
 @gin.configurable
-class MaskGenerator(nn.Module):
+class MaskGenerator(ParallelizableModule):
   """GRU-based mask generator."""
   def __init__(self, embed_dim, rnn_dim, mask_mode, sample_mode, input_more,
                output_more, temp):
@@ -163,6 +182,7 @@ class MaskGenerator(nn.Module):
     self.mask_mode = mask_mode
     self.input_more = input_more
     self.output_more = output_more
+    self.rnn_dim = rnn_dim
     self._mask_gen_fn = None
 
     input_dim = embed_dim  # feature dim
@@ -194,11 +214,11 @@ class MaskGenerator(nn.Module):
       raise Exception(f'Unknown mask_mode: {self.mask_mode}')
     return torch.zeros(n_batches, 1)
 
-  def generate_mask(self, tensor, n_classes, mask_mode):
-    assert isinstance(mask_mode in ['class', 'sample'])
-
   def init_loss(self, n_batches):
     return self.init_mask(n_batches)
+
+  def static_init_state(self, n_batches):
+    return C(torch.zeros(n_batches, self.rnn_dim), 1)
 
   def forward(self, x, mask=None, loss=None):
     """
@@ -215,7 +235,8 @@ class MaskGenerator(nn.Module):
     """
     # generate states from the features at the first loop.
     if self.state is None:
-      state = self.state_linear(x.detach())
+      # state = self.state_linear(x.detach())
+      state = self.static_init_state(x.size(0))
     else:
       state = self.state
 
@@ -255,7 +276,7 @@ class MaskGenerator(nn.Module):
 
 
 @gin.configurable
-class Sampler(nn.Module):
+class Sampler(ParallelizableModule):
   """A Sampler module incorporating all other submodules."""
   _save_name = 'meta.params'
 
@@ -291,3 +312,11 @@ class Sampler(nn.Module):
   @property
   def dec_ins(self):
     return DecoderInstance()
+
+  def cuda_parallel_(self, dict_, parallel):
+    if parallel:
+      for name, module in self.named_modules():
+        if name in dict_.keys():
+          module.cuda(dict_[name])
+    else:
+      self.cuda()

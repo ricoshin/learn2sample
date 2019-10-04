@@ -9,7 +9,7 @@ from loop import loop
 from nn.sampler import Sampler
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
-from utils.utils import prepare_dir
+from utils.utils import prepare_dir, MyDataParallel
 
 
 C = utils.getCudaManager('default')
@@ -27,17 +27,22 @@ parser.add_argument('--visible_devices', nargs='+', type=int, default=None,
 
 @gin.configurable
 def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
-               save_path, outer_optim, outer_lr, parallel):
+               save_path, outer_optim, outer_lr):
   best_acc = 0
   no_improvement = 0
+  sampler = Sampler()
+  sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
+  sampler = MyDataParallel(sampler)
+  # sampler.mask_gen = MyDataParallel(sampler.mask_gen)
+  # sampler.mask_gen.data_parallel_recursive_()
 
-  sampler = C(Sampler(), parallel=parallel, device=0)
   outer_optim = {'sgd': 'SGD', 'adam': 'Adam'}[outer_optim.lower()]
   outer_optim = getattr(torch.optim, outer_optim)(
       sampler.parameters(), lr=outer_lr)
 
   if save_path:
     writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
+
   for i in range(1, meta_epoch + 1):
     # meta train
     sampler, result_train = train_loop(
@@ -60,7 +65,8 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
       if save_path:
         # TODO: find better way
         #   why recursion error occurs if model is on GPU?
-        C(sampler.cpu().save(save_path), parallel, device=0)
+        sampler.cpu().save(save_path)
+        sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
       else:
         best_sampler = sampler
       best_acc = acc['ours']
@@ -74,7 +80,8 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
         print(f'Early stop counter: {no_improvement}/{tolerance}.')
 
   if save_path:
-    sampler = C(Sampler.load(save_path), device=0)
+    sampler = Sampler.load(save_path)
+    sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
   else:
     sampler = best_sampler
 
@@ -108,5 +115,5 @@ if __name__ == '__main__':
   # prepare dir
   save_path = prepare_dir(gin_path) if not args.volatile else None
   # main loop
-  meta_train(save_path=save_path, parallel=args.parallel)
+  meta_train(save_path=save_path)
   print('End_of_program.')

@@ -3,11 +3,11 @@ import torch.nn as nn
 from nn.output import ModelOutput
 from torch.nn import functional as F
 from utils.torchviz import make_dot
+from utils.utils import MyDataParallel
 
 
-class Params(nn.Module):
+class Params(object):
   """Parameters for Model(base-learner)."""
-
   def __init__(self, params_dict, name):
     super(Params, self).__init__()
     assert isinstance(params_dict, dict)
@@ -32,16 +32,15 @@ class Params(nn.Module):
     assert isinstance(module, nn.Module)
     return cls({k: v for k, v in module.named_parameters()}, name)
 
-  def cuda(self, device):
-    self._dict = {k: v.cuda(device) for k, v in self._dict.items()}
-    return self
-
-  def clone(self):
-    dict_ = {k: v.clone() for k, v in self._dict.items()}
+  def cuda(self, device=None, debug=False):
+    dict_ = {k: v.cuda(device) for k, v in self._dict.items()}
+    if debug:
+      import pdb; pdb.set_trace()
     return Params(dict_, self.name)
 
-  def copy(self):
-    return self.clone().detach_().requires_grad_()
+  def copy(self, name):
+    dict_ = {k: v.clone() for k, v in self._dict.items()}
+    return Params(dict_, name).detach_().requires_grad_()
 
   def with_name(self, name):
     return Params(self._dict, name)
@@ -55,11 +54,6 @@ class Params(nn.Module):
     for k in self._dict.keys():
       self._dict[k].detach_()
     return self
-
-  def detach_requiresd_grad(self):
-    dict_ = {k: v.detach().requires_grad_(True)
-             for k, v in self._dict.items()}
-    return Params(dict_, self.name)
 
   def param_names(self):
     return list(self._dict.keys())
@@ -92,7 +86,7 @@ class Model(nn.Module):
     self.kn = [5, 5, 3, 3]
     self.n_classes = n_classes
     self.nll_loss = nn.NLLLoss(reduction='none')
-    self.n_group = 1
+    self.n_group = 8
     # if self.n_classes is not None:
     # self.classifier = nn.Conv2d(ch[-1], self.n_classes, 3)
 
@@ -110,7 +104,7 @@ class Model(nn.Module):
     return Params.from_module(layers, name)
 
   def _forward(self, x, p):
-    assert isinstance(p, Params)
+    assert isinstance(p, (Params, MyDataParallel))
     p = p._dict
     for i in range(len(self.ch) - 1):
       x = F.conv2d(x, p[f'conv_{i}.weight'], p[f'conv_{i}.bias'])
@@ -136,7 +130,7 @@ class Model(nn.Module):
       loss (torch.FloatTensor): cross entropy loss.
       acc (torch.FloatTensor): accuracy of classification.
     """
-    assert isinstance(params, Params)
+    assert isinstance(params, (Params, MyDataParallel))
     if self.n_classes is None:
       raise RuntimeError(
           'forward() with Model.n_class=None is only meant to be called in '

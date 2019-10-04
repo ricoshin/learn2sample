@@ -17,22 +17,22 @@ class MaskRecoder(object):
   def append(self, mask):
     self._masks.append(mask.squeeze().tolist())
 
-  def plot(self, every_n_rows):
+  def plot(self, every_n_rows, annot):
     masks = pd.DataFrame(self._masks)
     masks.index += 1
     if len(masks.index) >= every_n_rows:
       masks = masks[masks.index % every_n_rows == 0]
-    heatmap = sns.heatmap(masks, vmin=0, vmax=1, annot=True, linewidth=0.5,
+    heatmap = sns.heatmap(masks, vmin=0, vmax=1, annot=annot, linewidth=0.5,
                           fmt="4.2f", cmap="YlGnBu")
     return heatmap
 
-  def save_fig(self, file_name, save_path, every_n_rows=5):
+  def save_fig(self, file_name, save_path, every_n_rows=5, annot=False):
     if save_path is None:
       return
     file_path = os.path.join(save_path, file_name + '.png')
     if not os.path.exists(os.path.dirname(file_path)):
       os.makedirs(os.path.dirname(file_path))
-    figure = self.plot(every_n_rows).get_figure()
+    figure = self.plot(every_n_rows, annot).get_figure()
     figure.savefig(file_path)
     plt.close(figure)
 

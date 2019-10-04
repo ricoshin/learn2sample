@@ -67,34 +67,38 @@ class ModelOutput(object):
     return self._conf
 
   @property
-  def loss_m(self):
-    """mask weighted mean of loss."""
-    if self._mask is None:
-      raise Exception('Cannot get loss_m without mask!')
+  def loss_masked(self):
+    """masked elementwise loss."""
     if self._loss_m is None:
-      loss_m = self.overlay_mask(self.element_loss, self.mask)
-      self._loss_m = loss_m.sum() / self.mask.sum()
-    return self._loss_m
+      self._loss_m = self.overlay_mask(self.element_loss, self.mask)
+    return self._loss_m.mean(dim=1, keepdim=True)
 
   @property
-  def acc_m(self):
-    """mask weighted mean of accuracy."""
-    if self._mask is None:
-      raise Exception('Cannot get acc_m without mask!')
+  def loss_masked_mean(self):
+    """mask weighted mean of loss."""
+    return self.loss_masked.sum() / self.mask.sum().detach()
+
+  @property
+  def acc_masked(self):
+    """masked elementwise accuracy."""
     if self._acc_m is None:
-      acc_m = self.overlay_mask(self.element_acc, self.mask)
-      self._acc_m = acc_m.sum() / self.mask.sum().detach()
-    return self._acc_m
+      self._acc_m = self.overlay_mask(self.element_acc, self.mask)
+    return self._acc_m.mean(dim=1, keepdim=True)
 
   @property
-  def loss_s(self):
+  def acc_masked_mean(self):
+    """mask weighted mean of accuracy."""
+    return self.acc_masked.sum() / self.mask.sum()
+
+  @property
+  def loss_scaled(self):
     """loss scaled by mean of mask."""
     if self._loss_s is None:
       self._loss_s = self.loss * self.mask.mean().detach()
     return self._loss_s
 
   @property
-  def acc_s(self):
+  def acc_scaled(self):
     """accuracy scaled by mean of mask."""
     if self._acc_s is None:
       self._acc_s = self.acc * self.mask.mean().detach()
@@ -103,6 +107,7 @@ class ModelOutput(object):
   def overlay_mask(self, tensor, mask):
     assert all([isinstance(t, torch.Tensor) for t in [tensor, mask]])
     if tensor.size(0) > mask.size(0):  # classwise mask
+      # TODO: this is a bit dangerous.
       rest_dims = [tensor.size(i) for i in range(1, len(tensor.shape))]
       tensor = tensor.view(mask.size(0), -1, *rest_dims)
     else:
@@ -116,16 +121,17 @@ class ModelOutput(object):
     """to update utils.utils.Result"""
     names = ['loss', 'acc']
     if self._mask is not None and self.params_name == 'ours':
-      names.extend(('loss_m', 'acc_m'))
+      names.extend(('loss_masked_mean', 'acc_masked_mean'))
     return OrderedDict({self._get_name(n): getattr(self, n) for n in names})
 
   def to_text(self, print_conf):
     out = f'[{self.params_name}]{self.dataset_name[0]}:'
     if self._mask is not None:
-      out += f'{self.loss_m.tolist(): 5.2f}/{self.acc_m.tolist()*100:5.1f}%|'
-    if self.dataset_name == 'Support':
-      out += f'{self.loss.tolist(): 5.2f}/{self.acc.tolist()*100:5.1f}%|'
-    elif self.dataset_name == 'Query':
+      out += f'm.{self.loss_masked_mean.tolist(): 5.2f}/'
+      out += f'm.{self.acc_masked_mean.tolist()*100:5.1f}%|'
+    # if self.dataset_name == 'Support':
+    #   out += f'{self.loss.tolist(): 5.2f}/{self.acc.tolist()*100:5.1f}%|'
+    if self.dataset_name == 'Query':
       out += f'{Color.GREEN}{self.loss.tolist():5.2f}{Color.END}/'
       out += f'{Color.RED}{self.acc.tolist()*100:5.1f}{Color.END}%|'
       if print_conf:

@@ -73,12 +73,22 @@ def isnan(*args):
 
 class MyDataParallel(torch.nn.DataParallel):
   """To access the attributes after warpping a module with DataParallel."""
-
   def __getattr__(self, name):
     if name == 'module':
       # to avoid recursion
       return self.__dict__['_modules']['module']
     return getattr(self.module, name)
+
+
+class ParallelizableModule(torch.nn.Module):
+  """To perform submodule level parallelization by wrapping them with
+  MyDataParallel recursively only if the one is subclass of itself."""
+  def data_parallel_recursive_(self, is_parallel=True, recursive=False):
+    if is_parallel:
+      for name, module in self.named_children():
+        if recursive and issubclass(module.__class__, ParallelizableModule):
+          module.data_parallel_(is_parallel)
+        self.__dict__['_modules'][name] = MyDataParallel(module)
 
 
 class CUDAManager(object):
@@ -131,18 +141,25 @@ class CUDAManager(object):
         print('Number of GPUs that are currently available: '
               f'{torch.cuda.device_count()}')
         raise Exception('Visible number of GPU has to be larger than 3!')
+    if not self.cuda:
+      raise Exception('Cannnot set pararllel mode when CUDAManager.cuda=False')
     self.parallel = True
     print('Set data and model parallelization.')
     torch.cuda.manual_seed_all(manual_seed)
 
-  def __call__(self, obj, parallel=False, device=None):
+  def __call__(self, obj, device=None, parallel=True):
+    if isinstance(obj, (list, tuple)):
+      return [self.__call__(obj_, device, parallel) for obj_ in obj]
+    if not hasattr(obj, 'cuda'):
+      return obj  # to skip non-tensors
     if self.cuda is None:
       raise Exception("cuda configuration has to be set "
                       "by calling CUDAManager.set_cuda(boolean)")
-    obj = obj.cuda(device if self.parallel else 0) if self.cuda else obj
-    if isinstance(obj, torch.nn.Module) and self.parallel and parallel:
-      obj = MyDataParallel(obj)
-    return obj
+    return obj.cuda(device if self.parallel else 0) if self.cuda else obj
+    # if (isinstance(obj, torch.nn.Module) and self.parallel and parallel
+    #     and not obj.__class__ is MyDataParallel):
+    #   obj = MyDataParallel(obj)
+    #   print('a')
 
 
 class MyFormatter(logging.Formatter):
@@ -226,8 +243,8 @@ def prepare_dir(gin_path):
 class Printer():
   """Collection of printing functions."""
   @staticmethod
-  def step_info(
-          epoch, mode, out_step_cur, out_step_max, in_step_cur, in_step_max, lr):
+  def step_info(epoch, mode, out_step_cur, out_step_max, in_step_cur,
+                in_step_max, lr):
     return (f'[{mode}|epoch:{epoch:2d}]'
             f'[out:{out_step_cur:3d}/{out_step_max}|'
             f'in:{in_step_cur:4d}/{in_step_max}][{lr:4.3f}]')
@@ -239,7 +256,7 @@ class Printer():
             f'{episode.q.n_samples:2d}|')
 
   @staticmethod
-  def colorized_mask(mask, min=0.0, max=1.0, multi=100, fmt='3d', vis_num=30,
+  def colorized_mask(mask, min=0.0, max=1.0, multi=100, fmt='3d', vis_num=20,
                      colors=[160, 166, 172, 178, 184, 190]):
     out_str = []
     reset = "\033[0m"

@@ -14,7 +14,7 @@ test/loop.mode = "test"
 # meta_train: args
 meta_train.meta_epoch = 100
 meta_train.outer_optim = "adam"
-meta_train.outer_lr = 0.0001
+meta_train.outer_lr = 0.00001
 meta_train.tolerance = 2
 
 # loop: outer/inner steps
@@ -32,7 +32,7 @@ train/loop.meta_batchsize = 0
 Sampler.mask_mode = "class"  # sample / class
 Sampler.embed_dim = 500
 Sampler.rnn_dim = 500
-MaskGenerator.input_more = True
+MaskGenerator.input_more = False
 MaskGenerator.output_more = False
 MaskGenerator.sample_mode = False
 MaskGenerator.temp = 1.0
@@ -53,6 +53,6 @@ test/loop.fig_epochs = 60
 MetaMultiDataset.datasets = ['omniglot']
 MetaMultiDataset.multi_mode = True
 MetaMultiDataset.use_ontology = False
-MetaMultiDataset.fixed_ways = 5
+MetaMultiDataset.fixed_ways = 10
 MetaMultiDataset.fixed_support = 3
 MetaMultiDataset.fixed_query = 5

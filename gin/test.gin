@@ -14,11 +14,11 @@ test/loop.mode = "test"
 # meta_train: args
 meta_train.meta_epoch = 100
 meta_train.outer_optim = "adam"
-meta_train.outer_lr = 0.0001
+meta_train.outer_lr = 0.00001
 meta_train.tolerance = 2
 
 # loop: outer/inner steps
-loop.inner_lr = 0.01
+loop.inner_lr = 0.05
 loop.inner_steps = 120
 train/loop.outer_steps = 50
 valid/loop.outer_steps = 50
@@ -50,9 +50,9 @@ test/loop.fig_epochs = 60
 
 # dataset
 # ilsvrc_2012, aircraft, cu_birds, omniglot, quickdraw, vgg_flower, dtd, fungi
-MetaMultiDataset.datasets = ['omniglot']
+MetaMultiDataset.datasets = ['omniglot', 'quickdraw']
 MetaMultiDataset.multi_mode = True
 MetaMultiDataset.use_ontology = False
-MetaMultiDataset.fixed_ways = 5
-MetaMultiDataset.fixed_support = 3
-MetaMultiDataset.fixed_query = 5
+MetaMultiDataset.fixed_ways = 6
+MetaMultiDataset.fixed_support = 5
+MetaMultiDataset.fixed_query = 10
