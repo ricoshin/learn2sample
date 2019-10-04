@@ -75,7 +75,6 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
 
   if save_path:
     sampler = C(Sampler.load(save_path), device=0)
-    import pdb; pdb.set_trace()
   else:
     sampler = best_sampler
 

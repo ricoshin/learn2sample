@@ -26,10 +26,6 @@ def getSignalCatcher(name):
   if name not in _debuggers:
     _debuggers.update({name: SignalCatcher(name)})
   return _debuggers[name]
-  # global _debugger
-  # if _debugger is None:
-  #   _debugger = Debugger()
-  # return _debugger
 
 
 class SignalCatcher(object):
