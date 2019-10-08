@@ -131,10 +131,6 @@ class Model(nn.Module):
       acc (torch.FloatTensor): accuracy of classification.
     """
     assert isinstance(params, (Params, MyDataParallel))
-    if self.n_classes is None:
-      raise RuntimeError(
-          'forward() with Model.n_class=None is only meant to be called in '
-          'get_init_parameters() just for getting initial parameters.')
 
     x = dataset.imgs  # [n_cls*n_ins, 3, 84, 84]
     y = dataset.labels  # [n_cls*n_ins]
@@ -150,5 +146,10 @@ class Model(nn.Module):
     loss = self.nll_loss(x, y)  # [n_cls*n_ins]
 
     return ModelOutput(
-        params_name=params.name, dataset_name=dataset.name,
-        element_loss=loss, log_softmax=x, label=y, mask=mask)
+        params_name=params.name,
+        dataset_name=dataset.name,
+        n_classes=dataset.n_classes,
+        loss_sample=loss,
+        log_softmax=x,
+        label=y,
+        mask=mask)

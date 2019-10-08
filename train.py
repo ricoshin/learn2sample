@@ -58,8 +58,8 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
       writer.add_scalars('Loss/valid', {n: loss[n] for n in loss.index}, i)
       writer.add_scalars('Acc/valid', {n: acc[n] for n in acc.index}, i)
       # save numbers
-      result_train.save_to_csv(f'records/train_{i}', save_path)
-      result_valid.save_to_csv(f'records/valid_{i}', save_path)
+      result_train.save_csv(f'records/train_{i}', save_path)
+      result_valid.save_csv(f'records/valid_{i}', save_path)
     # update the best model
     if acc['ours'] > best_acc:
       if save_path:
@@ -89,7 +89,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   _, result_test = test_loop(sampler=sampler, save_path=save_path)
 
   if save_path:
-    result_test.save_to_csv('records/test', save_path)
+    result_test.save_csv('records/test', save_path)
     result_test.save_final_lineplot('loss_q_m', save_path)
     result_test.save_final_lineplot('acc_q_m', save_path)
 

@@ -33,27 +33,13 @@ class EncoderInstance(ParallelizableModule):
   def __init__(self, embed_dim):
     super(EncoderInstance, self).__init__()
     self.layers = nn.Sequential(
-        nn.Conv2d(3, 200, 3, 2),  # [n_cls*n_ins, 200, 30, 30]
-        nn.BatchNorm2d(200),
+        nn.Conv2d(3, embed_dim//2, 5, 3),  # [n_cls*n_ins, 16, 10, 10]
+        # nn.BatchNorm2d(embed_dim//2),
         nn.ReLU(True),
-        nn.Conv2d(200, 300, 3, 2),  # [n_cls*n_ins, 300, 14, 14]
-        nn.BatchNorm2d(300),
+        nn.Conv2d(embed_dim//2, embed_dim, 3, 3),  # [n_cls*n_ins, 32, 3, 3]
+        # nn.BatchNorm2d(embed_dim),
         nn.ReLU(True),
-        nn.Conv2d(300, 300, 3, 2),  # [n_cls*n_ins, 300, 12, 12]
-        nn.BatchNorm2d(300),
-        nn.ReLU(True),
-        nn.Conv2d(300, 400, 3, 2),  # [n_cls*n_ins, 500, 5, 5]
-        nn.BatchNorm2d(400),
-        nn.ReLU(True),
-        nn.Conv2d(400, 500, 4, 1),
-        # nn.MaxPool2d(3),  # torch.Size([n_cls*n_ins, 32])
-        # nn.Conv2d(3, embed_dim//2, 5, 3),  # [n_cls*n_ins, 16, 10, 10]
-        # # nn.BatchNorm2d(embed_dim//2),
-        # nn.ReLU(True),
-        # nn.Conv2d(embed_dim//2, embed_dim, 3, 3),  # [n_cls*n_ins, 32, 3, 3]
-        # # nn.BatchNorm2d(embed_dim),
-        # nn.ReLU(True),
-        # nn.MaxPool2d(3),  # torch.Size([n_cls*n_ins, 32])
+        nn.MaxPool2d(3),  # torch.Size([n_cls*n_ins, 32])
     )
 
   def forward(self, x):
@@ -67,7 +53,7 @@ class EncoderInstance(ParallelizableModule):
         instance-wise representation.
         torch.Size([n_cls*n_ins, feature_dim])
     """
-    # x = F.interpolate(x, size=32, mode='area')
+    x = F.interpolate(x, size=32, mode='area')
     self.resized = x
     # torch.Size([n_cls*n_ins, 3, 32, 32])
     for layer in self.layers:
@@ -235,8 +221,8 @@ class MaskGenerator(ParallelizableModule):
     """
     # generate states from the features at the first loop.
     if self.state is None:
-      # state = self.state_linear(x.detach())
-      state = self.static_init_state(x.size(0))
+      state = self.state_linear(x.detach())
+      # state = self.static_init_state(x.size(0))
     else:
       state = self.state
 

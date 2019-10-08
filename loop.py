@@ -10,7 +10,7 @@ from nn.model import Model
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.color import Color
-from utils.result import MaskRecoder, Result
+from utils.result import ResultDict, ResultFrame
 from utils.utils import Printer
 
 C = utils.getCudaManager('default')
@@ -54,17 +54,15 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
     assert (update_epochs is None) != (update_steps is None)
 
   # for result recordin
-  result = Result()
+  result_frame = ResultFrame()
+  result_dict = ResultDict()
   if save_path:
     writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
 
   for i in range(1, outer_steps + 1):
     outer_loss = 0
-    masks = MaskRecoder()
 
     for j, epi in enumerate(metadata.loader(n_batches=1), 1):
-      result_dict = OrderedDict()
-
       try:
         epi_s_sampler = C(epi.s, 0)  # support set for sampler
         epi_s_model = C(epi.s, 2)  # support set for learner
@@ -91,10 +89,6 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         params_b1 = C(params.copy('b1'), 4)
 
       for k in range(1, inner_steps + 1):
-        # put below lines anywhere you want to debug online.
-        if sig_2.is_active():
-          import pdb; pdb.set_trace()
-
         # task encoding (very first step and right after a meta-update)
         if (k == 1) or (train and (k - 1) % unroll_steps == 0):
           with torch.set_grad_enabled(train):
@@ -108,8 +102,6 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         # use learned learning rate if available
         #   inner_lr: preset / lr: learned
         lr = inner_lr if lr is None else lr
-        # record mask
-        masks.append(mask)
 
         # train on support set
         params, mask = C([params, mask], 2)
@@ -125,11 +117,6 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           params = C(params, 3)
           out_q = model(epi_q_model, params, mask=None)
 
-
-        # record result
-        result_dict.update(outer_step=epoch * i, inner_step=k)
-        result_dict.update(**out_s.as_dict(), **out_q.as_dict())
-
         if not train or force_base:
           # feed support set (baseline)
           out_s_b0 = model(epi_s_base, params_b0, None)
@@ -139,19 +126,29 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           out_s_b1.attach_mask(mask)
 
           # inner gradient step (baseline)
-          params_b0 = params_b0.sgd_step(out_s_b0.loss, inner_lr, 'no_grad')
-          params_b1 = params_b1.sgd_step(out_s_b1.loss_scaled, lr, 'no_grad')
+
+          # lll = out_s_b0.loss * 0.5
+          params_b0 = params_b0.sgd_step(
+            out_s_b0.loss.mean(), inner_lr, 'no_grad')
+          params_b1 = params_b1.sgd_step(
+            out_s_b1.loss_scaled_mean, lr, 'no_grad')
 
           with torch.no_grad():
             # test on query set
             out_q_b0 = model(epi_q_base, params_b0, mask=None)
             out_q_b1 = model(epi_q_base, params_b1, mask=None)
+
           # record result
-          result_dict.update(**out_s_b0.as_dict(), **out_s_b1.as_dict())
-          result_dict.update(**out_q_b0.as_dict(), **out_q_b1.as_dict())
+          result_dict.append(
+            outer_step=epoch * i, inner_step=k,
+            **out_s.as_dict(), **out_q.as_dict(),
+            **out_s_b0.as_dict(), **out_s_b1.as_dict(),
+            **out_q_b0.as_dict(), **out_q_b1.as_dict())
+          ### end of inner steps (k) ###
 
         # append to the dataframe
-        result = result.append_tensors(result_dict)
+        result_frame = result_frame.append_dict(
+          result_dict.index_all(-1).mean_all(-1))
 
         # logging
         if k % log_steps == 0:
@@ -168,9 +165,13 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
             msg += Printer.outputs([out_q_b0, out_q_b1], sig_1.is_active())
           print(msg)
 
+        # to debug in the middle of running process.
+        if k == inner_steps and sig_2.is_active():
+          import pdb; pdb.set_trace()
+
         # compute outer gradient
         if train and (k % unroll_steps == 0 or k == inner_steps):
-          outer_loss += out_q.loss
+          outer_loss += out_q.loss.mean()
           outer_loss.backward()
           outer_loss = 0
           params.detach_().requires_grad_()
@@ -185,6 +186,8 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         if train and update_steps and k % update_steps == 0:
           outer_optim.step()
           sampler.zero_grad()
+        ### end of meta minibatch (j) ###
+
 
       if train and update_epochs and i % update_epochs == 0:
         outer_optim.step()
@@ -198,7 +201,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       # tensorboard
       if save_path and train:
         step = (epoch * (outer_steps - 1)) + i
-        res = Result(result[result['outer_step'] == i])
+        res = ResultFrame(result_frame[result_frame['outer_step'] == i])
         loss = res.get_best_loss().mean()
         acc = res.get_best_acc().mean()
         writer.add_scalars(
@@ -207,15 +210,19 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
       # dump figures
       if save_path and i % fig_epochs == 0:
-        epi.s.save_fig(f'imgs/support_{i}', save_path)
-        epi.q.save_fig(f'imgs/query_{i}', save_path)
-        masks.save_fig(f'imgs/masks_{i}', save_path, annot=False)
+        epi.s.save_fig(f'imgs/support', save_path, i)
+        epi.q.save_fig(f'imgs/query', save_path, i)
+        result_dict['ours_s_mask'].save_fig(f'imgs/masks', save_path, i)
+        result_dict.get_items(['ours_s_mask', 'ours_s_loss',
+          'ours_s_loss_masked', 'b0_s_loss', 'b1_s_loss']).save_csv(
+            f'classwise/{mode}', save_path, i)
 
       # distinguishable episodes
       if not i == outer_steps:
         print(f'Path for saving: {save_path}')
         print(f'End_of_episode: {i}')
+      ### end of episode (i) ###
 
   print(f'End_of_{mode}.')
   # del metadata
-  return sampler, result
+  return sampler, result_frame

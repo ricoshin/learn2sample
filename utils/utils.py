@@ -102,7 +102,7 @@ class CUDAManager(object):
     self.parallel = False
     self.visible_devices = None
 
-  def set_cuda(self, cuda, manual_seed=None):
+  def set_cuda(self, cuda, manual_seed=999):
     assert isinstance(cuda, bool)
     self.cuda = cuda
     print(f"Global cuda manager '{self.name}' is set to {self.cuda}.")

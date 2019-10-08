@@ -1,3 +1,30 @@
+"""
+  Usage:
+
+    ResultList(List) -> ResultDict(OrderedDict) -> ResultFrame(pd.DataFrame)
+
+  Example:
+
+    result_dict = ResultDict()
+    result_dict.append(key_0=value_00, key_1=value_01), ...)
+    result_dict.append(key_0=value_01, key_1=value_11), ...)
+
+    >>> result_dict = ResultDict({
+          key_0=ResultList([value_00, value_01, ...]),
+          key_1=ResultList([value_10, value_11, ...]),
+        })
+
+    result_frame = ResultFrame()
+    result_frmae = result_frame.append_tensors(result_dict.index_all(0))
+    result_frmae = result_frame.append_tensors(result_dict.mean_all())
+
+    >>> result_frame =
+            key_0        |      key_1       |       ...
+        ----------------------------------------------------
+          tensor_00      |   tensor_10      |       ...
+          tensor_0_mean  |   tensor_1_mean  |       ...
+"""
+
 import os
 import pickle
 from collections import OrderedDict
@@ -9,53 +36,108 @@ import seaborn as sns
 import torch
 
 
-class MaskRecoder(object):
-  """A class for tracking"""
-  def __init__(self):
-    self._masks = []
+class ResultList(list):
+  def __repr__(self):
+    return 'ResultList(' + super(ResultList, self).__repr__() + ')'
 
-  def append(self, mask):
-    self._masks.append(mask.squeeze().tolist())
+  def __getitem__(self, key):
+    item = super(ResultList, self).__getitem__(key)
+    if isinstance(item, list):
+      item = ResultList(item)
+    return item
 
-  def plot(self, every_n_rows, annot):
-    masks = pd.DataFrame(self._masks)
-    masks.index += 1
-    if len(masks.index) >= every_n_rows:
-      masks = masks[masks.index % every_n_rows == 0]
-    heatmap = sns.heatmap(masks, vmin=0, vmax=1, annot=annot, linewidth=0.5,
+  def append(self, value):
+    if isinstance(value, torch.Tensor):
+      value = value.squeeze().tolist()
+    super(ResultList, self).append(value)
+
+  def mean(self, dim=None):
+    mean_ = np.mean(list(self), axis=dim)
+    if isinstance(mean_, list):
+      mean_ = ResultList(mean_)
+    return mean_
+
+  def plot_heatmap(self, every_n_rows, annot):
+    df = pd.DataFrame(list(self))
+    df.index += 1
+    if len(df.index) >= every_n_rows:
+      df = df[df.index % every_n_rows == 0]
+    heatmap = sns.heatmap(df, vmin=0, vmax=1, annot=annot, linewidth=0.5,
                           fmt="4.2f", cmap="YlGnBu")
     return heatmap
 
-  def save_fig(self, file_name, save_path, every_n_rows=5, annot=False):
+  def save_fig(self, file_name, save_path, i, every_n_rows=5, annot=False):
     if save_path is None:
       return
+    file_name = file_name + '_' + str(i).zfill(4)
     file_path = os.path.join(save_path, file_name + '.png')
     if not os.path.exists(os.path.dirname(file_path)):
       os.makedirs(os.path.dirname(file_path))
-    figure = self.plot(every_n_rows, annot).get_figure()
+    figure = self.plot_heatmap(every_n_rows, annot).get_figure()
     figure.savefig(file_path)
     plt.close(figure)
 
+  def save_csv(self, file_name, save_path, i):
+    if save_path is None:
+      return
+    file_name = file_name + '_' + str(i).zfill(4)
+    file_path = os.path.join(save_path, file_name + '.csv')
+    if not os.path.exists(os.path.dirname(file_path)):
+      os.makedirs(os.path.dirname(file_path))
+    pd.DataFrame(list(self)).to_csv(file_path, mode='w')
+    print(f'Saved csv file: {file_path}')
 
-class Result(pd.DataFrame):
+
+class ResultDict(OrderedDict):
+  def append(self, **kwargs):
+    if len(self) == 0:
+      self.update(OrderedDict({k: ResultList() for k in kwargs.keys()}))
+    else:
+      if not self.keys() == kwargs.keys():
+        raise Exception(f'mismatched keys: {kwargs.keys()} and {self.keys()}')
+    for key, value in kwargs.items():
+      self.__getitem__(key).append(value)
+
+  def index_all(self, key):
+    """indexes every elements by the same key."""
+    assert isinstance(key, int)
+    return ResultDict({k: v[key] for k, v in self.items()})
+
+  def mean_all(self, dim=None):
+    return ResultDict(
+      {k: v.mean(dim) if hasattr(v, 'mean') else v
+          for k, v in self.items()})
+
+  def get_items(self, keys):
+    assert isinstance(keys, (list, tuple))
+    return ResultDict({k: v for k, v in self.items() if k in keys})
+
+  def save_csv(self, prefix, save_path, i):
+    if save_path is None:
+      return
+    for k, v in self.items():
+      v.save_csv(f'{prefix})_{k}', save_path, i)
+
+
+class ResultFrame(pd.DataFrame):
   """Result recoder and plotter subclassing pd.DataFrame."""
   @property
   def model_names(self):
     return list(set([col.split('_')[0] for col in self.columns]))
 
-  def append_tensors(self, dict_, to_num=True):
-    assert isinstance(dict_, OrderedDict)
+  def append_dict(self, dict_, to_num=True):
+    assert isinstance(dict_, ResultDict)
     if to_num:
       dict_ = {k: v.tolist() if isinstance(v, torch.Tensor) else v
                for k, v in dict_.items()}
-    return Result(self.append(dict_, ignore_index=True))
+    return ResultFrame(self.append(dict_, ignore_index=True))
 
   def group_fn(self, fn_name, group_name, cond):
     assert isinstance(group_name, str)
     assert callable(cond)
     group = self.groupby([group_name], sort=True)
     columns = [c for c in self.columns if cond(c)]
-    return Result(getattr(group[columns], fn_name)())
+    return ResultFrame(getattr(group[columns], fn_name)())
 
   def group_max(self, column_name, group_name):
     return self.group_fn('max', group_name, lambda x: x == column_name)
@@ -69,7 +151,7 @@ class Result(pd.DataFrame):
     new_columns = [col.split('_')[0] for col in columns]
     best_loss = self.groupby(['outer_step'], sort=True)[columns].min()
     best_loss.columns = new_columns
-    return Result(best_loss)
+    return ResultFrame(best_loss)
 
   def get_best_acc(self):
     columns = [col for col in self.columns
@@ -77,13 +159,15 @@ class Result(pd.DataFrame):
     new_columns = [col.split('_')[0] for col in columns]
     best_acc = self.groupby(['outer_step'], sort=True)[columns].max()
     best_acc.columns = new_columns
-    return Result(best_acc)
+    return ResultFrame(best_acc)
 
   def find(self, name, whitelist=[]):
-    return Result(self[[col for col in self
+    return ResultFrame(self[[col for col in self
                         if name in col or col in whitelist]])
 
-  def save_final_lineplot(self, name, save_path):
+  def save_final_lineplot(self, name, save_path=None):
+    if save_path is None:
+      return
     df = self.find(name=name, whitelist=['inner_step'])
     df = df.melt(id_vars='inner_step', var_name='model', value_name=name)
     df['model'] = [d.split('_')[0] for d in df['model']]
@@ -104,7 +188,7 @@ class Result(pd.DataFrame):
       with open(os.path.join(save_path, 'final.txt'), 'a') as f:
         f.write(msg + '\n')
 
-  def save_to_csv(self, file_name, save_path=None):
+  def save_csv(self, file_name, save_path=None):
     if save_path is None:
       return
     file_path = os.path.join(save_path, file_name + '.csv')
@@ -113,7 +197,7 @@ class Result(pd.DataFrame):
     self.to_csv(file_path, mode='w')
     print(f'Saved csv file: {file_path}')
 
-  def save_to_fig(self, file_name, save_path=None):
+  def save_fig(self, file_name, save_path=None):
     if save_path is None:
       return
     file_path = os.path.join(save_path, file_name + '.csv')

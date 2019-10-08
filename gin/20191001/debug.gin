@@ -54,5 +54,5 @@ MetaMultiDataset.datasets = ['omniglot']
 MetaMultiDataset.multi_mode = True
 MetaMultiDataset.use_ontology = False
 MetaMultiDataset.fixed_ways = 5
-MetaMultiDataset.fixed_support = 3
-MetaMultiDataset.fixed_query = 5
+MetaMultiDataset.fixed_support = 1
+MetaMultiDataset.fixed_query = 3

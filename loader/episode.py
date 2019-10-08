@@ -166,9 +166,10 @@ class Dataset(object):
       ax.imshow(image / 2 + 0.5)
     return plt
 
-  def save_fig(self, file_name, save_path):
+  def save_fig(self, file_name, save_path, i):
     if save_path is None:
       return
+    file_name = file_name + '_' + str(i).zfill(4)
     file_path = os.path.join(save_path, file_name + '.png')
     if not os.path.exists(os.path.dirname(file_path)):
       os.makedirs(os.path.dirname(file_path))
