@@ -55,7 +55,6 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
   # for result recordin
   result_frame = ResultFrame()
-  result_dict = ResultDict()
   if save_path:
     writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
 
@@ -88,6 +87,7 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         params_b0 = C(params.copy('b0'), 4)
         params_b1 = C(params.copy('b1'), 4)
 
+      result_dict = ResultDict()
       for k in range(1, inner_steps + 1):
         # task encoding (very first step and right after a meta-update)
         if (k == 1) or (train and (k - 1) % unroll_steps == 0):
@@ -214,7 +214,8 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         epi.q.save_fig(f'imgs/query', save_path, i)
         result_dict['ours_s_mask'].save_fig(f'imgs/masks', save_path, i)
         result_dict.get_items(['ours_s_mask', 'ours_s_loss',
-          'ours_s_loss_masked', 'b0_s_loss', 'b1_s_loss']).save_csv(
+          'ours_s_loss_masked', 'b0_s_loss', 'b1_s_loss',
+          'ours_q_loss', 'b0_q_loss', 'b1_q_loss']).save_csv(
             f'classwise/{mode}', save_path, i)
 
       # distinguishable episodes

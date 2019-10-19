@@ -36,17 +36,17 @@ import collections
 from meta_dataset.dataset_conversion import dataset_to_records
 import tensorflow as tf
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'mini_imagenet_records_dir',
     # This dataset is for diagnostic purposes only, which is why we want to
     # store it in a different location than the other datasets.
     '',
     'The path to store the tf.Records of MiniImageNet.')
 
-tf.flags.DEFINE_string('dataset', 'omniglot',
+flags.DEFINE_string('dataset', 'omniglot',
                        'The name of the dataset to convert to records.')
 
-FLAGS = tf.flags.FLAGS
+FLAGS = flags.FLAGS
 
 
 class ConverterArgs(
@@ -66,7 +66,7 @@ def _dataset_name_to_converter_and_args(flags=FLAGS):
   DatasetConverter object.
 
   Args:
-    flags: A tf.flags.FlagValues object, by default tf.flags.FLAGS, containing
+    flags: A flags.FlagValues object, by default flags.FLAGS, containing
       the data_root of the datasets.
   """
   # The dictionary is built inside a function, rather than at the module

@@ -59,14 +59,14 @@ from six.moves import zip
 import six.moves.cPickle as pkl
 import tensorflow as tf
 
-FLAGS = tf.flags.FLAGS
+FLAGS = flags.FLAGS
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'all_experiments_root',
     '',
     'The overall experiments directory root.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'experiment_dir_basenames', ''
     'baseline_imagenet_icml2019_1/3602170,'
     'baselinefinetune_imagenet_icml2019_1/3581340',
@@ -80,18 +80,18 @@ tf.flags.DEFINE_string(
 # TODO(etriantafillou): This assumes the variants to omit are the same for all
 # experiments that model selection will be ran for which doesn't make much
 # sense. Maybe just remove this altogether?
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'restrict_to_variants', '', 'A comma-separated list of '
     'variants to restrict to for model selection. This is '
     'useful for example for finding the best out of all '
     'variants that use a specific embedding or image size.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'restrict_to_variants_by_range', '', 'A comma-separated list of '
     'two integers that represent the start and end range (both inclusive) '
     'of variant ids to restrict to.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'description', 'best', 'The description for the output. The output will '
     'then be named as description.pklz and description.txt. For example, this '
     'can be used to reflect that some variants were omitted.')
@@ -99,11 +99,11 @@ tf.flags.DEFINE_string(
 # The following two flags assume that the parameters of the experiments have
 # been logged (they attempt to read from them). If this is not the case, the
 # restrict_to_variants flag should be used instead.
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'restrict_to_architectures', '', 'The comma-separated names of the '
     'embedding networks to restrict to for model selection.')
 
-tf.flags.DEFINE_enum(
+flags.DEFINE_enum(
     'restrict_to_pretrained_source', '', ['', 'scratch', 'imagenet'],
     'The name of a  pretrained_source to '
     'restrict to for model selection.')

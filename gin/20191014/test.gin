@@ -14,14 +14,14 @@ test/loop.mode = "test"
 # meta_train: args
 meta_train.meta_epoch = 100
 meta_train.outer_optim = "adam"
-meta_train.outer_lr = 0.001
+meta_train.outer_lr = 0.0001
 meta_train.tolerance = 2
 
 # loop: outer/inner steps
 loop.inner_lr = 0.001
-loop.inner_steps = 50
-train/loop.outer_steps = 50
-valid/loop.outer_steps = 50
+loop.inner_steps = 120
+train/loop.outer_steps = 10
+valid/loop.outer_steps = 10
 test/loop.outer_steps = 600
 
 # loop: only for meta-training
@@ -32,7 +32,7 @@ train/loop.meta_batchsize = 0
 Sampler.mask_mode = "class"  # sample / class
 Sampler.embed_dim = 500
 Sampler.rnn_dim = 500
-MaskGenerator.input_more = False
+MaskGenerator.input_more = True
 MaskGenerator.output_more = False
 MaskGenerator.sample_mode = False
 MaskGenerator.temp = 1.0
@@ -44,15 +44,15 @@ test/loop.log_steps = 20
 loop.log_mask = True
 
 # figure saving epochs
-train/loop.fig_epochs = 5
-valid/loop.fig_epochs = 60
+train/loop.fig_epochs = 1
+valid/loop.fig_epochs = 1
 test/loop.fig_epochs = 60
 
 # dataset
 # ilsvrc_2012, aircraft, cu_birds, omniglot, quickdraw, vgg_flower, dtd, fungi
-MetaMultiDataset.datasets = ['omniglot', 'ilsvrc_2012']
+MetaMultiDataset.datasets = ['omniglot', 'quickdraw']
 MetaMultiDataset.multi_mode = True
 MetaMultiDataset.use_ontology = False
-MetaMultiDataset.fixed_ways = 10
-MetaMultiDataset.fixed_support = 10
-MetaMultiDataset.fixed_query = 10
+MetaMultiDataset.fixed_ways = 6
+MetaMultiDataset.fixed_support = 6
+MetaMultiDataset.fixed_query = 6

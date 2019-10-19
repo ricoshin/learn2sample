@@ -32,6 +32,8 @@ class EncoderInstance(ParallelizableModule):
   """Instance-level encoder."""
   def __init__(self, embed_dim):
     super(EncoderInstance, self).__init__()
+    # assert embed_dim % 2 == 0
+    # embed_dim = int(embed_dim / 2)
     self.layers = nn.Sequential(
         nn.Conv2d(3, embed_dim//2, 5, 3),  # [n_cls*n_ins, 16, 10, 10]
         # nn.BatchNorm2d(embed_dim//2),
@@ -67,11 +69,24 @@ class DecoderInstance(nn.Module):
   def __init__(self, embed_dim):
     super(DecoderInstance, self).__init__()
     self.layers = nn.Sequential(
-      nn.ConvTranspose2d(embed_dim, embed_dim, 3, 1),
+      nn.Conv2d(3, 200, 3, 2),  # [n_cls*n_ins, 200, 30, 30]
+      nn.BatchNorm2d(200),
       nn.ReLU(True),
-      nn.ConvTranspose2d(embed_dim, embed_dim//2, 4, 3),
+      nn.Conv2d(200, 300, 3, 2),  # [n_cls*n_ins, 300, 14, 14]
+      nn.BatchNorm2d(300),
       nn.ReLU(True),
-      nn.ConvTranspose2d(embed_dim//2, 3, 5, 3),
+      nn.Conv2d(300, 300, 3, 2),  # [n_cls*n_ins, 300, 12, 12]
+      nn.BatchNorm2d(300),
+      nn.ReLU(True),
+      nn.Conv2d(300, 400, 3, 2),  # [n_cls*n_ins, 500, 5, 5]
+      nn.BatchNorm2d(400),
+      nn.ReLU(True),
+      nn.Conv2d(400, 500, 4, 1),
+      # nn.ConvTranspose2d(embed_dim, embed_dim, 3, 1),
+      # nn.ReLU(True),
+      # nn.ConvTranspose2d(embed_dim, embed_dim//2, 4, 3),
+      # nn.ReLU(True),
+      # nn.ConvTranspose2d(embed_dim//2, 3, 5, 3),
     )
 
   def forward(self, x):
@@ -86,7 +101,9 @@ class EncoderClass(nn.Module):
   """Class-level encoder using Deep set."""
   def __init__(self, embed_dim):
     super(EncoderClass, self).__init__()
-    self.bn = nn.BatchNorm1d(embed_dim, affine=False)
+    # assert embed_dim % 2 == 0
+    # embed_dim = int(embed_dim / 2)
+    self.bn = nn.BatchNorm1d(embed_dim, affine=False, track_running_stats=False)
     # self.rho = nn.Linear(embed_dim, embed_dim)
     self.sigmoid = nn.Sigmoid()
     self.tanh = nn.Tanh()
@@ -94,8 +111,22 @@ class EncoderClass(nn.Module):
     # self.lamb = nn.Parameter(torch.tensor([.9]))
     # self.gamm = nn.Parameter(torch.tensor([.1]))
     self.max_pool = nn.MaxPool1d(embed_dim)
+    self.linear_class_embed = nn.Linear(embed_dim * 4, embed_dim)
+    self.linear_task_embed = nn.Linear(embed_dim * 4, embed_dim)
+    self.linear_final_embed = nn.Linear(embed_dim * 2, embed_dim)
 
-  def forward(self, x, n_classes):
+  def moments_statistics(self, x, dim, eps=1e-8, detach=True):
+    mean = x.mean(dim=dim, keepdim=True)
+    var = x.var(dim=dim, keepdim=True)
+    std = var.sqrt()
+    skew = ((x - mean)**3 / (std**3 + eps)).mean(dim=dim, keepdim=True) + eps
+    kurt = ((x - mean)**4 / (std**4 + eps)).mean(dim=dim, keepdim=True) + eps
+    out = [mean, var.detach(), skew.detach(), kurt.detach()]
+    if detach:
+      out = list(map(lambda x: getattr(x, 'detach')(), out))
+    return torch.cat(out, dim=-1)
+
+  def forward(self, x, n_classes, mode='moments'):
     """
     Args:
       x (torch.FloatTensor):
@@ -108,13 +139,37 @@ class EncoderClass(nn.Module):
         class-wise representation.
         torch.Size([n_cls, feature_dim])
     """
+    assert mode in ['simple', 'moments']
     n_total = x.size(0)
     embed_dim = x.size(1)
     n_samples = int(n_total / n_classes)
-    x = x.view(n_classes, n_samples, embed_dim)
+    # x_mean = x.mean(dim=0)#x.mean(dim=1)
+    if mode == 'moments':
+      x_class = x.view(n_classes, n_samples, embed_dim)
+      x_class = self.moments_statistics(x_class, dim=1, detach=False)
+      x_class = self.linear_class_embed(x_class)
+      # x_class = x.mean(dim=1, keepdim=True)
+      x_task = self.moments_statistics(x_class, dim=0, detach=False)
+      x_task = self.linear_task_embed(x_task)
+      x = torch.cat([x_task.repeat(n_classes, 1, 1), x_class], dim=-1).squeeze()
+      # x = torch.cat([x_task.expand_as(x_class), x_class], dim=-1).squeeze()
+      # import pdb; pdb.set_trace()
+      x = self.linear_final_embed(x)
+    elif mode =='simple':
+      x_class = x.view(n_classes, n_samples, embed_dim)
+      x_class = x_class.mean(dim=1, keepdim=True)
+      # x = x_class - x_class.mean()
+      # x = torch.cat(x_class.std())
+      x = self.bn(x_class).squeeze()
+      # x = x_class - x_class.mean()  # [n_cls , feature_dim]
+
+    return x
+
+    x = x.mean(dim=1)
     # x = x.view(sup.n_classes, sup.n_samples, -1)
     # Permutation invariant set encoding
-    x = x.mean(dim=1)  # [n_cls , feature_dim]
+    # import pdb; pdb.set_trace()
+    # x = self.tanh(x.mean(dim=1) - x_mean)  # [n_cls , feature_dim]
     # Permutation equivariant set encoding
     # max_pool = F.max_pool1d(x.permute(1, 0).unsqueeze(0), x.size(0))
     # x = self.relu((self.lamb * x) + (self.gamm * max_pool.squeeze()))
@@ -171,9 +226,9 @@ class MaskGenerator(ParallelizableModule):
     self.rnn_dim = rnn_dim
     self._mask_gen_fn = None
 
-    input_dim = embed_dim  # feature dim
+    input_dim = embed_dim + 1 # feature dim, step
     output_dim = 1  # mask only
-    input_dim = input_dim + 5 if input_more else input_dim  # mask and loss
+    input_dim = input_dim + 5 if input_more else input_dim  # mask, loss
     output_dim = output_dim + 1 if output_more else output_dim  # lr
 
     self.preprocess = Preprocessor()
@@ -182,6 +237,8 @@ class MaskGenerator(ParallelizableModule):
     self.out_linear = nn.Linear(rnn_dim, output_dim)
     self.c = nn.Parameter(torch.tensor(-3.0))
     self.relu = nn.ReLU(inplace=True)
+    self._step = C(torch.tensor(0.0))
+    self._step_max = C(torch.tensor(150.0))
 
     if not sample_mode:
       self.sigmoid = nn.Sigmoid()
@@ -191,6 +248,11 @@ class MaskGenerator(ParallelizableModule):
   def detach_(self):
     self.state.detach_()
 
+  @property
+  def step(self):
+    self._step += 1
+    return self._step / self._step_max
+
   def init_mask(self, n_classes, n_samples):
     if self.mask_mode == 'class':
       n_batches = n_classes
@@ -198,7 +260,7 @@ class MaskGenerator(ParallelizableModule):
       n_batches = n_classes * n_samples
     else:
       raise Exception(f'Unknown mask_mode: {self.mask_mode}')
-    return torch.zeros(n_batches, 1)
+    return torch.ones(n_batches, 1)
 
   def init_loss(self, n_batches):
     return self.init_mask(n_batches)
@@ -221,10 +283,8 @@ class MaskGenerator(ParallelizableModule):
     """
     # generate states from the features at the first loop.
     if self.state is None:
-      state = self.state_linear(x.detach())
+      self.state = self.state_linear(x.detach())
       # state = self.static_init_state(x.size(0))
-    else:
-      state = self.state
 
     if self.input_more:
       # detach from the graph
@@ -237,16 +297,19 @@ class MaskGenerator(ParallelizableModule):
       loss_rel = loss - loss_mean  # relative loss
       loss_mean = self.preprocess(loss_mean).detach()
       loss_rel = self.preprocess(loss_rel).detach()
-
-      x = torch.cat([x, mask, loss_mean, loss_rel], dim=1)
+      step = self.step.repeat(loss.size(0), 1)
+      x = torch.cat([x, mask, loss_mean, loss_rel, step], dim=1)
       # [n_cls , feature_dim + 1 + 2 + 2]
+    else:
+      step = self.step.repeat(loss.size(0), 1)
+      x = torch.cat([x, step], dim=1)
 
-    self.state = self.gru(x, state)  # [n_cls , rnn_h_dim]
-    x = self.out_linear(state)  # [n_cls , 1]
+    self.state = self.gru(x, self.state)  # [n_cls , rnn_h_dim]
+    x = self.out_linear(self.state)  # [n_cls , 1]
 
     if self.output_more:
       mask = x[:, 0].unsqueeze(1)
-      lr = (x[:, 1].mean() + self.c).exp()
+      lr = x[:, 1].mean().exp()# + self.c).exp()
     else:
       mask = x
 

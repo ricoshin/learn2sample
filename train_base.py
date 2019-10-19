@@ -5,7 +5,7 @@ import sys
 
 import gin
 import torch
-from loop2 import loop
+from loop_base import loop
 from nn.sampler import Sampler
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
@@ -30,15 +30,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
                save_path, outer_optim, outer_lr):
   best_acc = 0
   no_improvement = 0
-  sampler = Sampler()
-  sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
-  sampler = MyDataParallel(sampler)
-  # sampler.mask_gen = MyDataParallel(sampler.mask_gen)
-  # sampler.mask_gen.data_parallel_recursive_()
-
-  outer_optim = {'sgd': 'SGD', 'adam': 'Adam'}[outer_optim.lower()]
-  outer_optim = getattr(torch.optim, outer_optim)(
-      sampler.parameters(), lr=outer_lr)
+  sampler = None
 
   if save_path:
     writer = SummaryWriter(os.path.join(save_path, 'tfevent'))

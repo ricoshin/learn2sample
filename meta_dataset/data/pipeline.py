@@ -25,19 +25,17 @@ needed, decode the example strings, and resize the images.
 # TODO(lamblinp): Update variable names to be more consistent
 # - target, class_idx, label
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import absolute_import, division, print_function
 
 import functools
 
-import gin.tf
-from meta_dataset import data
-from meta_dataset.data import learning_spec
-from meta_dataset.data import reader
-from meta_dataset.data import sampling
 from six.moves import zip
+
+import gin.tf
 import tensorflow as tf
+from meta_dataset import data
+from meta_dataset.data import learning_spec, reader, sampling
+from tensorflow.compat.v1 import logging
 
 
 def filter_dummy_examples(example_strings, class_ids):
@@ -60,14 +58,14 @@ def filter_dummy_examples(example_strings, class_ids):
 def _log_data_augmentation(data_augmentation, name):
   """Logs the given data augmentation parameters for diagnostic purposes."""
   if not data_augmentation:
-    tf.logging.info('No data augmentation provided for %s', name)
+    logging.info('No data augmentation provided for %s', name)
   else:
-    tf.logging.info('%s augmentations:', name)
-    tf.logging.info('enable_jitter: %s', data_augmentation.enable_jitter)
-    tf.logging.info('jitter_amount: %d', data_augmentation.jitter_amount)
-    tf.logging.info('enable_gaussian_noise: %s',
+    logging.info('%s augmentations:', name)
+    logging.info('enable_jitter: %s', data_augmentation.enable_jitter)
+    logging.info('jitter_amount: %d', data_augmentation.jitter_amount)
+    logging.info('enable_gaussian_noise: %s',
                     data_augmentation.enable_gaussian_noise)
-    tf.logging.info('gaussian_noise_std: %s',
+    logging.info('gaussian_noise_std: %s',
                     data_augmentation.gaussian_noise_std)
 
 
@@ -173,7 +171,8 @@ def process_batch(example_strings,
       process_example,
       image_size=image_size,
       data_augmentation=batch_data_augmentation)
-  images = tf.map_fn(map_fn, example_strings, dtype=tf.float32, back_prop=False)
+  images = tf.map_fn(map_fn, example_strings,
+                     dtype=tf.float32, back_prop=False)
   labels = class_ids
   return (images, labels)
 
@@ -196,29 +195,29 @@ def process_example(example_string, image_size, data_augmentation=None):
       to [-1, 1]. Note that Gaussian data augmentation may cause values to
       go beyond this range.
   """
-  image_string = tf.parse_single_example(
+  image_string = tf.compat.v1.parse_single_example(
       example_string,
       features={
-          'image': tf.FixedLenFeature([], dtype=tf.string),
-          'label': tf.FixedLenFeature([], tf.int64)
+          'image': tf.compat.v1.FixedLenFeature([], dtype=tf.string),
+          'label': tf.compat.v1.FixedLenFeature([], tf.int64)
       })['image']
-  image_decoded = tf.image.decode_jpeg(image_string, channels=3)
-  image_resized = tf.image.resize_images(
+  image_decoded = tf.compat.v1.image.decode_jpeg(image_string, channels=3)
+  image_resized = tf.compat.v1.image.resize_images(
       image_decoded, [image_size, image_size],
-      method=tf.image.ResizeMethod.BILINEAR,
+      method=tf.compat.v1.image.ResizeMethod.BILINEAR,
       align_corners=True)
   image = 2 * (image_resized / 255.0 - 0.5)  # Rescale to [-1, 1].
 
   if data_augmentation is not None:
     if data_augmentation.enable_gaussian_noise:
-      image = image + tf.random_normal(
+      image = image + tf.compat.v1.random_normal(
           tf.shape(image)) * data_augmentation.gaussian_noise_std
 
     if data_augmentation.enable_jitter:
       j = data_augmentation.jitter_amount
       paddings = tf.constant([[j, j], [j, j], [0, 0]])
       image = tf.pad(image, paddings, 'REFLECT')
-      image = tf.image.random_crop(image, [image_size, image_size, 3])
+      image = tf.compat.v1.image.random_crop(image, [image_size, image_size, 3])
 
   return image
 

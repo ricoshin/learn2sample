@@ -17,7 +17,6 @@ from meta_dataset.data import learning_spec, pipeline
 BASE_PATH = '/st1/dataset/meta-dataset/records'  # HDD
 GIN_FILE_PATH = 'meta_dataset/learn/gin/setups/learn2sample.gin'
 gin.parse_config_file(GIN_FILE_PATH)
-tf.enable_eager_execution()
 
 
 @gin.configurable

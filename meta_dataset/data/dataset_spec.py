@@ -33,10 +33,10 @@ from six.moves import range
 from six.moves import zip
 import tensorflow as tf
 
-# Global records root directory, for all datasets (except diagnostics).
-tf.flags.DEFINE_string('records_root_dir', '',
-                       'Root directory containing a subdirectory per dataset.')
-FLAGS = tf.flags.FLAGS
+# # Global records root directory, for all datasets (except diagnostics).
+# flags.DEFINE_string('records_root_dir', '',
+#                        'Root directory containing a subdirectory per dataset.')
+# FLAGS = flags.FLAGS
 
 
 def get_classes(split, classes_per_split):

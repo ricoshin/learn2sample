@@ -116,7 +116,7 @@ class ResultDict(OrderedDict):
     if save_path is None:
       return
     for k, v in self.items():
-      v.save_csv(f'{prefix})_{k}', save_path, i)
+      v.save_csv(f'{prefix}_{k}', save_path, i)
 
 
 class ResultFrame(pd.DataFrame):

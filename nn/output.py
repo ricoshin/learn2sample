@@ -145,11 +145,12 @@ class ModelOutput(object):
 
   def to_text(self, print_conf=False):
     out = f'[{self.params_name}]{self.dataset_name[0]}:'
-    if self._mask is not None:
-      out += f'm.{self.loss_masked_mean.tolist(): 5.2f}/'
-      out += f'm.{self.acc_masked_mean.tolist()*100:5.1f}%|'
-    # if self.dataset_name == 'Support':
-    #   out += f'{self.loss.tolist(): 5.2f}/{self.acc.tolist()*100:5.1f}%|'
+    if self.dataset_name == 'Support':
+      out += f'{self.loss.mean().tolist(): 5.2f}/'
+      out += f'{self.acc.mean().tolist()*100:5.1f}%|'
+      # if self._mask is not None:
+      #   out += f'm.{self.loss_masked_mean.tolist(): 5.2f}/'
+      #   out += f'm.{self.acc_masked_mean.tolist()*100:5.1f}%|'
     if self.dataset_name == 'Query':
       out += f'{Color.GREEN}{self.loss.mean().tolist():5.2f}{Color.END}/'
       out += f'{Color.RED}{self.acc.mean().tolist()*100:5.1f}{Color.END}%|'

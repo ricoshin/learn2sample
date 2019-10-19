@@ -55,53 +55,53 @@ import tensorflow as tf
 
 # Datasets in the same order as reported in the article.
 # 'ilsvrc_2012_data_root' is already defined in imagenet_specification.py.
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'ilsvrc_2012_num_leaf_images_path', '',
     'A path used as a cache for a dict mapping the WordNet id of each Synset '
     'of a ILSVRC 2012 class to its number of images. If empty, it defaults to '
     '"ilsvrc_2012/num_leaf_images.json" inside records_root.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'omniglot_data_root',
     '',
     'Path to the root of the omniglot data.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'aircraft_data_root',
     '',
     'Path to the root of the FGVC-Aircraft Benchmark.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'cu_birds_data_root',
     '',
     'Path to the root of the CU-Birds dataset.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'dtd_data_root',
     '',
     'Path to the root of the Describable Textures Dataset.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'quickdraw_data_root',
     '',
     'Path to the root of the quickdraw data.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'fungi_data_root',
     '',
     'Path to the root of the fungi data.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'vgg_flower_data_root',
     '',
     'Path to the root of the VGG Flower data.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'traffic_sign_data_root',
     '',
     'Path to the root of the Traffic Sign dataset.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'mscoco_data_root',
     '',
     'Path to the root of the MSCOCO images and annotations. The root directory '
@@ -110,23 +110,23 @@ tf.flags.DEFINE_string(
     'http://cocodataset.org/#download and unzipped into the root directory.')
 
 # Diagnostics-only dataset.
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'mini_imagenet_data_root',
     '',
     'Path to the root of the MiniImageNet data.')
 
 # Output flags.
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'records_root',
     '',
     'The root directory storing all tf.Records of datasets.')
 
-tf.flags.DEFINE_string(
+flags.DEFINE_string(
     'splits_root',
     '',
     'The root directory storing the splits of datasets.')
 
-FLAGS = tf.flags.FLAGS
+FLAGS = flags.FLAGS
 DEFAULT_FILE_PATTERN = '{}.tfrecords'
 TRAIN_TEST_FILE_PATTERN = '{}_{}.tfrecords'
 ILSCRC_DUPLICATES_PATH = os.path.dirname(os.path.realpath(__file__))
