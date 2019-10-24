@@ -14,18 +14,18 @@ test/loop.mode = "test"
 # meta_train: args
 meta_train.meta_epoch = 100
 meta_train.outer_optim = "adam"
-meta_train.outer_lr = 0.001
+meta_train.outer_lr = 0.0001
 meta_train.tolerance = 2
 
 # loop: outer/inner steps
-loop.inner_lr = 0.001
-loop.inner_steps = 50
+loop.inner_lr = 0.0001
+loop.inner_steps = 30
 train/loop.outer_steps = 50
 valid/loop.outer_steps = 50
 test/loop.outer_steps = 600
 
 # loop: only for meta-training
-train/loop.unroll_steps = 20
+train/loop.unroll_steps = 3
 train/loop.meta_batchsize = 0
 
 # sampler

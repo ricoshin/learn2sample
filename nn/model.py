@@ -1,13 +1,17 @@
+import pdb
+
 import torch
 import torch.nn as nn
 from nn.output import ModelOutput
 from torch.nn import functional as F
 from utils.torchviz import make_dot
 from utils.utils import MyDataParallel
+from loader.episode import Dataset, Episode
 
 
 class Params(object):
   """Parameters for Model(base-learner)."""
+
   def __init__(self, params_dict, name):
     super(Params, self).__init__()
     assert isinstance(params_dict, dict)
@@ -35,7 +39,8 @@ class Params(object):
   def cuda(self, device=None, debug=False):
     dict_ = {k: v.cuda(device) for k, v in self._dict.items()}
     if debug:
-      import pdb; pdb.set_trace()
+      import pdb
+      pdb.set_trace()
     return Params(dict_, self.name)
 
   def copy(self, name):
@@ -66,7 +71,8 @@ class Params(object):
           loss, params.values(), create_graph=(grad_mode == 'second'),
           allow_unused=True)
       if debug:
-        import pdb; pdb.set_trace()
+        import pdb
+        pdb.set_trace()
       new_params = {}
       for (name, param), grad in zip(params.items(), grads):
         new_params[name] = param - lr * grad
@@ -80,8 +86,12 @@ class Model(nn.Module):
   model. The forward pass has to be dealt with functionals by taking over those
   parameters as a funtion argument."""
 
-  def __init__(self, n_classes):
+  def __init__(self, n_classes, mode):
     super(Model, self).__init__()
+    assert mode in ['fc', 'metric']
+    # fc: conventional learning using fully-connected layer
+    # metric: metric-based learning using Euclidean distance (Prototypical Net)
+    self.mode = mode
     self.ch = [3, 64, 64, 64, 128]
     self.kn = [5, 5, 3, 3]
     self.n_classes = n_classes
@@ -100,7 +110,8 @@ class Model(nn.Module):
           [f'relu_{i}', nn.ReLU(inplace=True)],
           [f'mp_{i}', nn.MaxPool2d(2, 2)],
       ])
-    layers.update({f'last_conv': nn.Conv2d(self.ch[-1], self.n_classes, 3)})
+    if self.mode == 'fc':
+      layers.update({f'last_conv': nn.Conv2d(self.ch[-1], self.n_classes, 3)})
     return Params.from_module(layers, name)
 
   def _forward(self, x, p):
@@ -112,43 +123,78 @@ class Model(nn.Module):
                        bias=p[f'norm_{i}.bias'])
       x = F.relu(x, inplace=True)
       x = F.max_pool2d(x, 2, 2)
-    x = F.conv2d(x, p[f'last_conv.weight'], p[f'last_conv.bias'], 3)
+    if self.mode == 'fc':
+      x = F.conv2d(x, p[f'last_conv.weight'], p[f'last_conv.bias'], 3)
     return x
 
-  def forward(self, dataset, params, mask=None, debug=False):
+  def _euclidean_dist(self, proto_types, query_embed):
+    n_classes = proto_types.size(0)  # [n_classes, embed_dim]
+    n_samples = query_embed.size(0)  # [n_samples, embed_dim]
+    proto_types = proto_types.unsqueeze(0).expand(n_samples, n_classes, -1)
+    query_embed = query_embed.unsqueeze(1).expand(n_samples, n_classes, -1)
+    logit = -((proto_types - query_embed)**2).sum(dim=2)
+    return logit  # [n_samples, n_classes]
+
+  def _metric_based_logit(self, support_embed, query_data, params):
+    # reshaping functions
+    classwise = query_data.get_view_classwise_fn()
+    flatten = lambda x: x.view(x.size(0), -1)
+    # prototypes: [n_classes, embed_dim]
+    proto_types = classwise(flatten(support_embed)).mean(dim=1)
+    # query embedings: [n_samples, embed_dim]
+    query_embed = flatten(self._forward(query_data.imgs, params).squeeze())
+    return self._euclidean_dist(proto_types, query_embed)
+
+  def forward(self, data, params, mask=None, debug=False):
     """
     Args:
-      dataset (loader.Dataset):
-        Support or query set(imgs/labels/ids).
-      params (nn.model.Params)
+      data (loader.Dataset or loader.Episode):
+        loader.episode.Dataset:
+          Support or query set (standard learning / 'fc' mode)
+        loader.episode.Epidose:
+          Support and query set (meta-learning / 'metric' mode)
+      params (nn.model.Params):
+        model parameters that can be updated outside of the module.
       mask (torch.FloatTensor):
         Classwise weighting overlay mask.
         Controls the effects from each classes.
         torch.Size([n_cls*n_ins, 1])
 
     Returns:
-      loss (torch.FloatTensor): cross entropy loss.
-      acc (torch.FloatTensor): accuracy of classification.
+      nn.output.ModelOutput
     """
     assert isinstance(params, (Params, MyDataParallel))
 
-    x = dataset.imgs  # [n_cls*n_ins, 3, 84, 84]
-    y = dataset.labels  # [n_cls*n_ins]
+    # images and labels
+    if self.mode == 'fc':
+      assert isinstance(data, Dataset)
+      x = data.imgs  # [n_cls*n_ins, 3, 84, 84]
+      y = data.labels  # [n_cls*n_ins]
+    elif self.mode == 'metric':
+      assert isinstance(data, Episode)
+      x = data.s.imgs
+      y = data.s.labels
 
     # funtional forward
-    x = self._forward(x, params)  # [n_cls*n_ins, n_cls, 1, 1]
+    x = self._forward(x, params).squeeze()  # [n_cls*n_ins, n_cls, 1, 1]
+
+    if self.mode == 'metric':
+      x = self._metric_based_logit(x, data.q, params)
+      y = data.q.labels
+
+    # import pdb; pdb.set_trace()
+
     if debug:
-      import pdb
       pdb.set_trace()
 
     # loss
-    x = F.log_softmax(x.squeeze(), dim=1)  # [n_cls*n_ins, n_cls]
+    x = F.log_softmax(x, dim=1)  # [n_cls*n_ins, n_cls]
     loss = self.nll_loss(x, y)  # [n_cls*n_ins]
 
     return ModelOutput(
         params_name=params.name,
-        dataset_name=dataset.name,
-        n_classes=dataset.n_classes,
+        dataset_name=data.name,
+        n_classes=data.n_classes,
         loss_sample=loss,
         log_softmax=x,
         label=y,

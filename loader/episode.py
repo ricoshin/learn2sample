@@ -71,6 +71,9 @@ class Dataset(object):
     ids = self.ids  # .cuda()  # useless for now
     return Dataset(imgs, labels, ids, self.name)
 
+  def subset(self):
+    pass
+
   def numpy(self):
     """
     Returns:
@@ -116,8 +119,11 @@ class Dataset(object):
   @classmethod
   def concat(cls, datasets):
     assert isinstance(datasets, Iterable)
-    assert all([datasets[0].name == datasets[i].name
-                for i in range(len(datasets))])
+    if all([datasets[0].name == datasets[i].name
+            for i in range(len(datasets))]):
+      name = dataset[0].name
+    else:
+      name = 'Support + Query'
     # TODO: heterogeneous concat?
     return cls(
         *map(lambda x: torch.cat(x, dim=0), zip(*datasets)), datasets[0].name)
@@ -182,10 +188,11 @@ class Episode(object):
   """Collection of support and query set. Single episode for a task adaptation
   can be wrapped with this class."""
 
-  def __init__(self, support, query, n_total_classes):
+  def __init__(self, support, query, n_total_classes, name='Episode'):
     assert all([isinstance(set, Dataset) for set in [support, query]])
     self.s = support
     self.q = query
+    self.name = name
     self.n_total_classes = n_total_classes
 
   def __iter__(self):
@@ -203,7 +210,7 @@ class Episode(object):
   def cuda(self, device):
     s = self.s.cuda(device)
     q = self.q.cuda(device)
-    return Episode(s, q, self.n_total_classes)
+    return Episode(s, q, self.n_total_classes, self.name)
 
   def numpy(self):
     """Returns tuple of numpy arrays.
@@ -213,8 +220,12 @@ class Episode(object):
     """
     return (*self.s.numpy(), *self.q.numpy())
 
+  def subset(self):
+    pass
+
   @classmethod
   def concat(cls, episodes):
+    """concatenate heterogeneous episodes."""
     assert isinstance(episodes, Iterable)
     episodes_ = []
     prev_n_cls = prev_n_total_cls = 0
@@ -224,7 +235,14 @@ class Episode(object):
       prev_n_cls = episode.n_classes
       prev_n_total_cls = episode.n_total_classes
       new_n_total_cls += episode.n_total_classes
-    return cls(*map(Dataset.concat, zip(*episodes_)), new_n_total_cls)
+    return cls(
+      *map(Dataset.concat, zip(*episodes_)), new_n_total_cls, self.name)
+
+  @property
+  def concatenated(self):
+    """concatenate support and query. returns loader.episode.Dataset."""
+    return self.s.concat([self.s, self.q])
+
 
   @classmethod
   def from_numpy(cls, episode, n_total_classes):
@@ -253,6 +271,19 @@ class Episode(object):
     support = Dataset.from_tf(*episode[0:3], 'Support')
     query = Dataset.from_tf(*episode[3:6], 'Query')
     return cls(support, query, n_total_classes)
+
+  @classmethod
+  def from_tensors(cls, support, query, name):
+    """TODO: n_total_classes is meaningless."""
+    support = Dataset(*support, 'Support')
+    query = Dataset(*query, 'Query')
+    return cls(support, query, 0, name)
+
+  @classmethod
+  def get_sampled_episode_from_loaders(cls, meta_s, meta_q, split_ratio):
+    Episode(meta_s.split_instance(split_ratio).get_loader())
+    meta_q_loader = meta_q.split_instance(split_ratio).get_loader()
+
 
   def show(self, size_multiplier=1, max_imgs_per_col=10, max_imgs_per_row=10):
     self.s.plot(size_multiplier, max_imgs_per_col, max_imgs_per_row).show()

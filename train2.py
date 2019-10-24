@@ -5,13 +5,16 @@ import sys
 
 import gin
 import torch
-from loop import loop
+from loader.metadata import ImagenetMetadata
+from loop_base2 import loop
 from nn.sampler import Sampler
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
-from utils.utils import set_random_seed, prepare_dir, MyDataParallel
+from utils.utils import MyDataParallel, prepare_dir, set_random_seed
 
 
+IMAGENET_DIR = '/v9/whshin/imagenet_l2s_84_84'
+DEVKIT_DIR = '/v9/whshin/imagenet/ILSVRC2012_devkit_t12'
 C = utils.getCudaManager('default')
 
 parser = argparse.ArgumentParser(description='Learning to sample')
@@ -31,9 +34,16 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
                save_path, outer_optim, outer_lr):
   best_acc = 0
   no_improvement = 0
+
+  # [ImageNet 1K] meta-train:100 / meta-valid:450 / meta-test:450 (classes)
+  meta_data = ImagenetMetadata.load_or_make(
+      data_dir=IMAGENET_DIR, devkit_dir=DEVKIT_DIR, remake=False)
+  meta_data_train, remainder = meta_data.split_class(0.1)
+  meta_data_valid, meta_data_test = remainder.split_class(0.5)
+
   sampler = Sampler()
-  sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
-  sampler = MyDataParallel(sampler)
+  # sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
+  # sampler = MyDataParallel(sampler)
   # sampler.mask_gen = MyDataParallel(sampler.mask_gen)
   # sampler.mask_gen.data_parallel_recursive_()
 
@@ -47,10 +57,20 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   for i in range(1, meta_epoch + 1):
     # meta train
     sampler, result_train = train_loop(
-        sampler=sampler, outer_optim=outer_optim, epoch=i, save_path=save_path)
+        data=meta_data_train,
+        sampler=sampler,
+        outer_optim=outer_optim,
+        save_path=save_path,
+        epoch=i,
+    )
+
     # meta valid
     _, result_valid = valid_loop(
-        sampler=sampler, epoch=i, save_path=save_path)
+        data=meta_data_valid,
+        sampler=sampler,
+        save_path=save_path,
+        epoch=i,
+    )
 
     loss = result_valid.get_best_loss().mean()
     acc = result_valid.get_best_acc().mean()
@@ -87,7 +107,10 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
     sampler = best_sampler
 
   # meta test
-  _, result_test = test_loop(sampler=sampler, save_path=save_path)
+  _, result_test = test_loop(
+      data=meta_data_test,
+      sampler=sampler,
+      save_path=save_path)
 
   if save_path:
     result_test.save_csv('records/test', save_path)
@@ -106,7 +129,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
 if __name__ == '__main__':
   print('Start_of_program.')
   args = parser.parse_args()
-  set_random_seed(args.seed)
+  # set_random_seed(args.seed)
   C.set_cuda(not args.cpu and torch.cuda.is_available())
   if args.parallel:
     C.set_visible_devices(args.visible_devices)

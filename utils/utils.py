@@ -1,6 +1,7 @@
 import importlib
 import logging
 import os
+import random
 import shutil
 import signal
 import time
@@ -26,6 +27,13 @@ def getSignalCatcher(name):
   if name not in _debuggers:
     _debuggers.update({name: SignalCatcher(name)})
   return _debuggers[name]
+
+
+def set_random_seed(seed):
+  random.seed(seed)
+  np.random.seed(seed)
+  torch.manual_seed(seed)
+  torch.backends.cudnn.deterministic = True
 
 
 class SignalCatcher(object):
@@ -73,6 +81,7 @@ def isnan(*args):
 
 class MyDataParallel(torch.nn.DataParallel):
   """To access the attributes after warpping a module with DataParallel."""
+
   def __getattr__(self, name):
     if name == 'module':
       # to avoid recursion
@@ -83,6 +92,7 @@ class MyDataParallel(torch.nn.DataParallel):
 class ParallelizableModule(torch.nn.Module):
   """To perform submodule level parallelization by wrapping them with
   MyDataParallel recursively only if the one is subclass of itself."""
+
   def data_parallel_recursive_(self, is_parallel=True, recursive=False):
     if is_parallel:
       for name, module in self.named_children():
@@ -250,7 +260,7 @@ class Printer():
             f'in:{in_step_cur:4d}/{in_step_max}][{lr:4.3f}]')
 
   @staticmethod
-  def way_shot_query(episode):
+  def way_shot_query(dataset):
     assert isinstance(episode, Episode)
     return (f'W/S/Q:{episode.n_classes:2d}/{episode.s.n_samples:2d}/'
             f'{episode.q.n_samples:2d}|')

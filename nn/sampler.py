@@ -126,7 +126,7 @@ class EncoderClass(nn.Module):
       out = list(map(lambda x: getattr(x, 'detach')(), out))
     return torch.cat(out, dim=-1)
 
-  def forward(self, x, n_classes, mode='moments'):
+  def forward(self, x, n_classes, mode='simple'):
     """
     Args:
       x (torch.FloatTensor):

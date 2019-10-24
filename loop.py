@@ -80,8 +80,8 @@ def loop(mode, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       params = model.get_init_params('ours')
 
       if not train or force_base:
-        """baseline 1: naive single task learning
-           baseline 2: single task learning with the same loss scale
+        """baseline 0: naive single task learning
+           baseline 1: single task learning with the same loss scale
         """
         # baseline parameters
         params_b0 = C(params.copy('b0'), 4)
