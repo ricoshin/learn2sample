@@ -22,6 +22,7 @@ from tqdm import tqdm
 
 RESIZE = (84, 84)
 IMAGENET_DIR = '/v9/whshin/imagenet'
+PROCESSED_DIR = '/st1/dataset/learn2sample'
 DEVKIT_DIR = '/v9/whshin/imagenet/ILSVRC2012_devkit_t12'
 VISIBLE_SUBDIRS = ['train', 'val']
 # VISIBLE_SUBDIRS = ['val']
@@ -30,7 +31,7 @@ SAVE_IMAGE_AS_TENSOR = True
 SAVE_CLASS = False
 REBUILD_METADATA = True
 NEW_DIR_POSTFIX = 'l2s'
-PASS_IF_EXIST = True
+PASS_IF_EXIST = False
 DEBUG = False
 MAX_N_PROCESS = 9999
 
@@ -52,7 +53,8 @@ def is_image_file(filepath):
 
 
 def new_dataset_path():
-  base = path.normpath(path.join(IMAGENET_DIR, os.pardir))
+  # base = path.normpath(path.join(IMAGENET_DIR, os.pardir))
+  base = PROCESSED_DIR
   dataset_name = path.basename(IMAGENET_DIR)
   dataset_name = "_".join([dataset_name, NEW_DIR_POSTFIX, *map(str, RESIZE)])
   return path.join(base, dataset_name)
@@ -123,15 +125,17 @@ def split_path(filepath):
 
 def process(chunk):
   idx_to_samples, i = chunk
-  transforms_ = [
+  preprocess = [
     # transforms.RandomResizedCrop(32),
     # transforms.RandomHorizontalFlip(0.5),
     transforms.Resize(RESIZE, interpolation=RESIZE_FILTER),
   ]
-  to_tensor = transforms.ToTensor()
   if SAVE_IMAGE_AS_TENSOR:
-    transforms_ += [to_tensor]
-  composed_transforms = transforms.Compose(transforms_)
+    to_tensor = [
+      transforms.ToTensor(),
+      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    ]
+    preprocess += to_tensor
   saved = 0
   passed = 0
   error_msgs = []
@@ -152,19 +156,21 @@ def process(chunk):
         passed += 1
         continue  # or not
       # processing part
+
       try:
         image = transform_image(
             path_old=filepath,
             path_new=filepath_new,
-            transforms=composed_transforms,
+            transforms=transforms.Compose(preprocess),
             save_image=SAVE_IMAGE,
         )
         saved += 1
       except Exception as e:
+        print(e)
         error_msgs.append(f"[{filepath}: {e})")
 
       if SAVE_CLASS:
-        tensors.append(to_tensor(image))
+        tensors.append(transforms.Compose(to_tensor)(image))
 
     if SAVE_CLASS:
       tensors = torch.stack(tensors)
@@ -206,7 +212,6 @@ def run():
     time.sleep(0.1)
 
   meta = ImagenetMetadata.load_or_make(
-      meta_dir=IMAGENET_DIR,
       remake=REBUILD_METADATA,
       data_dir=IMAGENET_DIR,
       visible_subdirs=['val'] if DEBUG else VISIBLE_SUBDIRS,

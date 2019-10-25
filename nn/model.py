@@ -63,18 +63,22 @@ class Params(object):
   def param_names(self):
     return list(self._dict.keys())
 
-  def sgd_step(self, loss, lr, grad_mode="no_grad", debug=False):
+  def sgd_step(self, loss, lr, grad_mode="no_grad", detach_param=True,
+               debug=False):
     assert grad_mode in ['no_grad', 'first', 'second']
     params = self._dict
     with torch.set_grad_enabled(grad_mode != 'no_grad'):
       grads = torch.autograd.grad(
-          loss, params.values(), create_graph=(grad_mode == 'second'),
-          allow_unused=True)
+          loss, params.values(),
+          create_graph=(grad_mode == 'second'),
+          allow_unused=True,
+          )
       if debug:
-        import pdb
         pdb.set_trace()
       new_params = {}
       for (name, param), grad in zip(params.items(), grads):
+        if detach_param:
+          param = param.detach()
         new_params[name] = param - lr * grad
     return Params(new_params, self.name).requires_grad_()
 

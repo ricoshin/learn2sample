@@ -169,7 +169,7 @@ class Dataset(object):
       else:
         ax = axarr[n_samples_per_class[class_id],
                    id_plot_index_map[class_id]]
-      ax.imshow(image / 2 + 0.5)
+      ax.imshow(image * 0.5 + 0.5)
     return plt
 
   def save_fig(self, file_name, save_path, i):

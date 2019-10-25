@@ -46,17 +46,9 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   model_mode = 'metric'
 
   # meta-support: 30 / meta-query: 70 classes
-  meta_support, remainder = data.split_class(0.1)
-  meta_query, _ = remainder.split_class(0.5)
-  episode_iterator = EpisodeIterator(
-    support=meta_support,
-    query=meta_query,
-    split_ratio=0.5,
-    inner_steps=inner_steps,
-    samples_per_class=samples_per_class,
-    num_workers=4,
-    pin_memory=False,
-  )
+  meta_support, remainder = data.split_class(0.1)  # 10
+  meta_query, _ = remainder.split_class(0.5)  # 45
+
 
   if train:
     if meta_batchsize > 0:
@@ -76,14 +68,23 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
   for i in range(1, outer_steps + 1):
 
+    import pdb; pdb.set_trace()
     model = Model(len(meta_support), mode=model_mode)
     # baseline parameters
     params_b0 = C(model.get_init_params('b0'))
 
     result_dict = ResultDict()
+    episode_iterator = EpisodeIterator(
+      support=meta_support,
+      query=meta_query,
+      split_ratio=0.5,
+      inner_steps=inner_steps,
+      samples_per_class=samples_per_class,
+      num_workers=2,
+      pin_memory=True,
+    )
     episode_iterator.sample_episode()
 
-    import pdb; pdb.set_trace()
     for k, (meta_s, meta_q) in enumerate(episode_iterator, 1):
       # import pdb; pdb.set_trace()
 
