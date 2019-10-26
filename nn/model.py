@@ -96,13 +96,11 @@ class Model(nn.Module):
     # fc: conventional learning using fully-connected layer
     # metric: metric-based learning using Euclidean distance (Prototypical Net)
     self.mode = mode
-    self.ch = [3, 64, 64, 64, 128]
-    self.kn = [5, 5, 3, 3]
+    self.ch = [3, 64, 64, 64, 64]
+    self.kn = [3, 3, 3, 3]
     self.n_classes = n_classes
     self.nll_loss = nn.NLLLoss(reduction='none')
-    self.n_group = 8
-    # if self.n_classes is not None:
-    # self.classifier = nn.Conv2d(ch[-1], self.n_classes, 3)
+    self.n_group = 1
 
   def get_init_params(self, name='ex'):
     assert isinstance(name, str)
@@ -110,7 +108,8 @@ class Model(nn.Module):
     for i in range(len(self.ch) - 1):
       layers.update([
           [f'conv_{i}', nn.Conv2d(self.ch[i], self.ch[i + 1], self.kn[i])],
-          [f'norm_{i}', nn.GroupNorm(self.n_group, self.ch[i + 1])],
+          # [f'norm_{i}', nn.GroupNorm(self.n_group, self.ch[i + 1])],
+          [f'bn_{i}', nn.BatchNorm2d(self.ch[i + 1], track_running_stats=False)],
           [f'relu_{i}', nn.ReLU(inplace=True)],
           [f'mp_{i}', nn.MaxPool2d(2, 2)],
       ])
@@ -123,8 +122,11 @@ class Model(nn.Module):
     p = p._dict
     for i in range(len(self.ch) - 1):
       x = F.conv2d(x, p[f'conv_{i}.weight'], p[f'conv_{i}.bias'])
-      x = F.group_norm(x, self.n_group, weight=p[f'norm_{i}.weight'],
-                       bias=p[f'norm_{i}.bias'])
+      # x = F.group_norm(x, self.n_group, weight=p[f'norm_{i}.weight'],
+      #                  bias=p[f'norm_{i}.bias'])
+      x = F.batch_norm(
+          x, running_mean=None, running_var=None, training=True,
+          weight=p[f'bn_{i}.weight'], bias=p[f'bn_{i}.bias'])
       x = F.relu(x, inplace=True)
       x = F.max_pool2d(x, 2, 2)
     if self.mode == 'fc':
@@ -171,9 +173,18 @@ class Model(nn.Module):
 
     # images and labels
     if self.mode == 'fc':
-      assert isinstance(data, Dataset)
-      x = data.imgs  # [n_cls*n_ins, 3, 84, 84]
-      y = data.labels  # [n_cls*n_ins]
+      if isinstance(data, Dataset):
+        # when using Meta-dataset
+        x = data.imgs  # [n_cls*n_ins, 3, 84, 84]
+        y = data.labels  # [n_cls*n_ins]
+      elif isinstance(data, Episode):
+        # when using customized bi-level dataset
+        # This case makes no sense (due to mismatched fc output dimension)
+        x = data.concatenated.imgs
+        y = data.concatenated.labels
+      else:
+        raise Exception()
+
     elif self.mode == 'metric':
       assert isinstance(data, Episode)
       x = data.s.imgs

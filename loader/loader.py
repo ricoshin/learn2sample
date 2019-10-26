@@ -50,8 +50,9 @@ class ClassBalancedSampler(data.Sampler):
 
 
 class EpisodeIterator(object):
-  def __init__(self, support, query, split_ratio, inner_steps, batch_size=None,
-               samples_per_class=None, num_workers=8, pin_memory=True):
+  def __init__(self, support, query, split_ratio, resample_every_episode,
+               inner_steps, batch_size=None, samples_per_class=None,
+               num_workers=8, pin_memory=True):
     assert isinstance(support, Metadata)
     assert isinstance(query, Metadata)
     if not ((batch_size is None) ^ (samples_per_class is None)):
@@ -59,6 +60,7 @@ class EpisodeIterator(object):
     self.support = support
     self.query = query
     self.split_ratio = split_ratio
+    self.resample_every_episode = resample_every_episode
     self.inner_steps = inner_steps
     self.batch_size = batch_size
     self.samples_per_class = samples_per_class
@@ -95,6 +97,8 @@ class EpisodeIterator(object):
     return [self.get_loader(metadata) for metadata in multi_metadata]
 
   def __iter__(self):
+    if self.resample_every_episode:
+      self.sample_episode()
     for _ in range(self.inner_steps):
       ss, sq, qs, qq = [loader.next() for loader in self.loaders]
       meta_s = Episode.from_tensors(ss, sq, 'Support')

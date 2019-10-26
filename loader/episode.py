@@ -22,8 +22,8 @@ class Dataset(object):
     self.imgs = imgs
     self.labels = labels
     self.ids = ids
-    self._n_classes = None
-    self._n_samples = None
+    self.n_classes = len(Counter(self.labels.tolist()).keys())
+    self.n_samples = int(len(self) / self.n_classes)
     self.name = name
 
   def __len__(self):
@@ -33,17 +33,17 @@ class Dataset(object):
   def __iter__(self):
     return iter([self.imgs, self.labels, self.ids])
 
-  @property
-  def n_classes(self):
-    if self._n_classes is None:
-      self._n_classes = len(Counter(self.labels.cpu().numpy()).keys())
-    return self._n_classes
+  # @property
+  # def n_classes(self):
+  #   if self._n_classes is None:
+  #     self._n_classes =
+  #   return self._n_classes
 
-  @property
-  def n_samples(self):
-    if self._n_samples is None:
-      self._n_samples = int(len(self) / self.n_classes)
-    return self._n_samples
+  # @property
+  # def n_samples(self):
+  #   if self._n_samples is None:
+  #     self._n_samples = int(len(self) / self.n_classes)
+  #   return self._n_samples
 
   def offset_indices(self, offset_labels, offset_ids):
     labels = self.labels + offset_labels

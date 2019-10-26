@@ -41,7 +41,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   meta_data_train, remainder = meta_data.split_class(0.1)
   meta_data_valid, meta_data_test = remainder.split_class(0.5)
 
-  sampler = Sampler()
+  sampler = C(Sampler())
   # sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
   # sampler = MyDataParallel(sampler)
   # sampler.mask_gen = MyDataParallel(sampler.mask_gen)

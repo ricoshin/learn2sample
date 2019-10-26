@@ -9,6 +9,7 @@ from loader.loader import EpisodeIterator
 from loader.metadata import Metadata
 from loader.meta_dataset import MetaDataset, MetaMultiDataset, PseudoMetaDataset
 from nn.model import Model
+from nn.output import ModelOutput
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.color import Color
@@ -40,14 +41,22 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   if mode != 'train' and unroll_steps is not None:
     raise Warning("unroll_steps has no effect when mode mode!='train'.")
 
-  samples_per_class = 5
+  samples_per_class = 10
   train = True if mode == 'train' else False
   force_base = True
   model_mode = 'metric'
+  # split_method = 'inclusive'
+  split_method = 'exclusive'
 
-  # meta-support: 30 / meta-query: 70 classes
-  meta_support, remainder = data.split_class(0.1)  # 10
-  meta_query, _ = remainder.split_class(0.5)  # 45
+  # 100 classes in total
+  if split_method == 'exclusive':
+    meta_support, remainder = data.split_class(0.1)  # 10 classes
+    meta_query = remainder.sample_class(50)  # 50 classes
+  elif split_method == 'inclusive':
+    subdata = data.sample_class(10)  # 50 classes
+    meta_support, meta_query = subdata.split_instance(0.5)  # 5:5 instances
+  else:
+    raise Exception()
 
 
   if train:
@@ -68,16 +77,22 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
   for i in range(1, outer_steps + 1):
 
+    fc_lr = 0.01
+    metric_lr = 0.01
     import pdb; pdb.set_trace()
-    model = Model(len(meta_support), mode=model_mode)
+    model_fc = Model(len(meta_support), mode='fc')
+    model_metric = Model(len(meta_support), mode='metric')
+
     # baseline parameters
-    params_b0 = C(model.get_init_params('b0'))
+    params_fc = C(model_fc.get_init_params('fc'))
+    params_metric = C(model_metric.get_init_params('metric'))
 
     result_dict = ResultDict()
     episode_iterator = EpisodeIterator(
       support=meta_support,
       query=meta_query,
       split_ratio=0.5,
+      resample_every_episode=True,
       inner_steps=inner_steps,
       samples_per_class=samples_per_class,
       num_workers=2,
@@ -88,26 +103,45 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
     for k, (meta_s, meta_q) in enumerate(episode_iterator, 1):
       # import pdb; pdb.set_trace()
 
-      # feed support set (baseline)
-      out_s_b0 = model(meta_s, params_b0, None)
+      # feed support set
+      # [standard network]
+      out_s_fc = model_fc(meta_s, params_fc, None)
+      with torch.no_grad():
+        # embedding space metric
+        params_fc_m = C(params_fc.copy('fc_m'))
+        out_s_fc_m = model_metric(meta_s, params_fc_m, mask=None)
+      # [prototypical network]
+      out_s_metric = model_metric(meta_s, params_metric, None)
 
       # inner gradient step (baseline)
-      params_b0 = params_b0.sgd_step(
-        out_s_b0.loss.mean(), inner_lr, 'no_grad')
+      params_fc = params_fc.sgd_step(
+        out_s_fc.loss.mean(), fc_lr, 'no_grad')
+      params_metric = params_metric.sgd_step(
+        out_s_metric.loss.mean(), metric_lr, 'no_grad')
 
+      # test on query set
       with torch.no_grad():
-        # test on query set
-        out_q_b0 = model(meta_q, params_b0, mask=None)
+        if split_method == 'inclusive':
+          out_q_fc = model_fc(meta_q, params_fc, mask=None)
+        params_fc_m = C(params_fc.copy('fc_m'))
+        out_q_fc_m = model_metric(meta_q, params_fc_m, mask=None)
+        out_q_metric = model_metric(meta_q, params_metric, mask=None)
+
+      if split_method == 'inclusive':
+        outs = [
+          out_s_fc, out_s_fc_m, out_s_metric, out_q_fc, out_q_fc_m, out_q_metric]
+      elif split_method == 'exclusive':
+        outs = [out_s_fc, out_s_fc_m, out_s_metric, out_q_fc_m, out_q_metric]
 
       # record result
       result_dict.append(
-        outer_step=epoch * i, inner_step=k,
-        **out_s_b0.as_dict(), **out_q_b0.as_dict())
+        outer_step=epoch * i, inner_step=k, **ModelOutput.as_merged_dict(outs))
       ### end of inner steps (k) ###
 
       # append to the dataframe
       result_frame = result_frame.append_dict(
         result_dict.index_all(-1).mean_all(-1))
+
 
       # logging
       if k % log_steps == 0:
@@ -118,8 +152,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         # print mask
         if not sig_1.is_active() and log_mask:
         # print outputs (loss, acc, etc.)
-          msg += Printer.outputs(
-            [out_s_b0, out_q_b0], sig_1.is_active())
+          msg += Printer.outputs(outs, True)
         print(msg)
 
       # to debug in the middle of running process.

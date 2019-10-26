@@ -159,3 +159,16 @@ class ModelOutput(object):
                *[int(c.tolist() * 100) if not torch.isnan(c) else -1
                  for c in self.conf.values()])
     return out
+
+  @classmethod
+  def as_merged_dict(cls, outputs):
+    """merge outputs with nonoverlapping keys into a dictionary."""
+    assert isinstance(outputs, (list, tuple))
+    assert isinstance(outputs[0], cls)
+    merged_dict = OrderedDict()
+    for output in outputs:
+      dict_ = output.as_dict()
+      for key in dict_.keys():
+        assert key not in merged_dict.keys()
+      merged_dict.update(dict_)
+    return merged_dict
