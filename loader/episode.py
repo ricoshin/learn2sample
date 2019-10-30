@@ -33,6 +33,24 @@ class Dataset(object):
   def __iter__(self):
     return iter([self.imgs, self.labels, self.ids])
 
+  def __getitem__(self, key):
+    """class indexing"""
+    rest_dims = [self.imgs.size(i) for i in range(1, len(self.imgs.shape))]
+    imgs = self.imgs.view(
+      self.n_classes, -1, *rest_dims)[key].view(-1, *rest_dims)
+    labels = self.labels.view(
+      self.n_classes, -1)[[i for i in range(len(key))]].view(-1)
+    ids = self.ids.view(self.n_classes, -1)[key].view(-1)
+    return Dataset(imgs, labels, ids, self.name)
+
+  def masked_select(self, mask):
+    assert isinstance(mask, torch.Tensor)
+    idx = mask.squeeze().nonzero().view(-1)
+    if len(idx) == 0:
+      return None
+    else:
+      return self.__getitem__(idx)
+
   # @property
   # def n_classes(self):
   #   if self._n_classes is None:
@@ -202,6 +220,19 @@ class Episode(object):
   def n_classes(self):
     assert self.s.n_classes == self.q.n_classes
     return self.s.n_classes
+
+  def masked_select(self, mask):
+    assert isinstance(mask, torch.Tensor)
+    idx = mask.squeeze().nonzero().view(-1)
+    if len(idx) == 0:
+      # TODO: exception handling
+      # s = None
+      # q = None
+      raise Exception('All classes were dropped!')
+    else:
+      s = self.s[idx]
+      q = self.q[idx]
+    return Episode(s, q, self.n_total_classes, self.name)
 
   def offset_indices(self, offset_labels, offset_ids):
     return Episode(*[set.offset_indices(offset_labels, offset_ids)

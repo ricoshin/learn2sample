@@ -14,28 +14,28 @@ test/loop.mode = "test"
 # meta_train: args
 meta_train.meta_epoch = 100
 meta_train.outer_optim = "adam"
-meta_train.outer_lr = 0.01
+meta_train.outer_lr = 0.0001
 meta_train.tolerance = 2
 
 # loop: outer/inner steps
 loop.inner_lr = 0.01
-loop.inner_steps = 10000
+loop.inner_steps = 500
 train/loop.outer_steps = 50
 valid/loop.outer_steps = 50
 test/loop.outer_steps = 600
 
 # loop: only for meta-training
-train/loop.unroll_steps = 3
+train/loop.unroll_steps = 5
 train/loop.meta_batchsize = 0
 
 # sampler
 Sampler.mask_mode = "class"  # sample / class
-Sampler.embed_dim = 500
-Sampler.rnn_dim = 500
-MaskGenerator.input_more = False
-MaskGenerator.output_more = False
-MaskGenerator.sample_mode = False
-MaskGenerator.temp = 1.0
+Sampler.embed_dim = 128
+Sampler.rnn_dim = 128
+# MaskGenerator.input_more = True
+# MaskGenerator.output_more = True
+# MaskGenerator.sample_mode = False
+# MaskGenerator.temp = 1.0
 
 # log printing steps
 train/loop.log_steps = 1

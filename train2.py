@@ -6,8 +6,8 @@ import sys
 import gin
 import torch
 from loader.metadata import ImagenetMetadata
-from loop_base2 import loop
-from nn.sampler import Sampler
+from loop2 import loop
+from nn.sampler2 import Sampler
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.utils import MyDataParallel, prepare_dir, set_random_seed

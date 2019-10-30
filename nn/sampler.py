@@ -309,7 +309,7 @@ class MaskGenerator(ParallelizableModule):
 
     if self.output_more:
       mask = x[:, 0].unsqueeze(1)
-      lr = x[:, 1].mean().exp()# + self.c).exp()
+      lr = (x[:, 1].mean() + self.c).exp()
     else:
       mask = x
 

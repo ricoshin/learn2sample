@@ -63,7 +63,7 @@ class Params(object):
   def param_names(self):
     return list(self._dict.keys())
 
-  def sgd_step(self, loss, lr, grad_mode="no_grad", detach_param=True,
+  def sgd_step(self, loss, lr, grad_mode="no_grad", detach_param=False,
                debug=False):
     assert grad_mode in ['no_grad', 'first', 'second']
     params = self._dict
@@ -99,7 +99,6 @@ class Model(nn.Module):
     self.ch = [3, 64, 64, 64, 64]
     self.kn = [3, 3, 3, 3]
     self.n_classes = n_classes
-    self.nll_loss = nn.NLLLoss(reduction='none')
     self.n_group = 1
 
   def get_init_params(self, name='ex'):
@@ -129,29 +128,23 @@ class Model(nn.Module):
           weight=p[f'bn_{i}.weight'], bias=p[f'bn_{i}.bias'])
       x = F.relu(x, inplace=True)
       x = F.max_pool2d(x, 2, 2)
-    if self.mode == 'fc':
-      x = F.conv2d(x, p[f'last_conv.weight'], p[f'last_conv.bias'], 3)
+
     return x
 
-  def _euclidean_dist(self, proto_types, query_embed):
+  def _pairwise_dist(self, support_embed, query_embed, classwise_fn):
+    flatten = lambda x: x.view(x.size(0), -1)
+    # prototypes: [n_classes, embed_dim]
+    proto_types = classwise_fn(flatten(support_embed)).mean(dim=1)
+    # query embedings: [n_samples, embed_dim]
+    query_embed = flatten(query_embed)
     n_classes = proto_types.size(0)  # [n_classes, embed_dim]
     n_samples = query_embed.size(0)  # [n_samples, embed_dim]
     proto_types = proto_types.unsqueeze(0).expand(n_samples, n_classes, -1)
     query_embed = query_embed.unsqueeze(1).expand(n_samples, n_classes, -1)
-    logit = -((proto_types - query_embed)**2).sum(dim=2)
-    return logit  # [n_samples, n_classes]
+    pairwise_dist = (proto_types - query_embed)**2
+    return pairwise_dist  # [n_samples, n_classes, dim]
 
-  def _metric_based_logit(self, support_embed, query_data, params):
-    # reshaping functions
-    classwise = query_data.get_view_classwise_fn()
-    flatten = lambda x: x.view(x.size(0), -1)
-    # prototypes: [n_classes, embed_dim]
-    proto_types = classwise(flatten(support_embed)).mean(dim=1)
-    # query embedings: [n_samples, embed_dim]
-    query_embed = flatten(self._forward(query_data.imgs, params).squeeze())
-    return self._euclidean_dist(proto_types, query_embed)
-
-  def forward(self, data, params, mask=None, debug=False):
+  def forward(self, data, params, mask=None, hard_mask=False, debug=False):
     """
     Args:
       data (loader.Dataset or loader.Episode):
@@ -166,51 +159,72 @@ class Model(nn.Module):
         Controls the effects from each classes.
         torch.Size([n_cls*n_ins, 1])
 
+                               |   input drop    |    softmax drop
+                               | (hard_mask=True)|  (hard_mask=False)
+    ----------------------------------------------------------------
+    Gradient-based  |    fc    |        x        |         o
+       Learning     |  metric  |        x        |         o
+    ----------------------------------------------------------------
+    Reinforcement   |    fc    |        o        |         o
+       Learning     |  metric  |        o        |         x
+
+    *In case of the metric-based learning, softmax units are automatically
+    reduced, whereas additional treatments are needed for the FC layer.
+    *If we use hard_mask
+
     Returns:
       nn.output.ModelOutput
     """
     assert isinstance(params, (Params, MyDataParallel))
 
-    # images and labels
-    if self.mode == 'fc':
-      if isinstance(data, Dataset):
-        # when using Meta-dataset
-        x = data.imgs  # [n_cls*n_ins, 3, 84, 84]
-        y = data.labels  # [n_cls*n_ins]
-      elif isinstance(data, Episode):
-        # when using customized bi-level dataset
-        # This case makes no sense (due to mismatched fc output dimension)
-        x = data.concatenated.imgs
-        y = data.concatenated.labels
-      else:
-        raise Exception()
+    if hard_mask and mask is not None:
+      # data level masking:
+      #  in case of prototypical network, there cannot be prototypes
+      #  when certain classes are masked out, then it has to be like
+      #  there were not those classes from the beginning.
+      mask = (mask > 0.01).float()
+      data = data.masked_select(mask)
 
-    elif self.mode == 'metric':
-      assert isinstance(data, Episode)
-      x = data.s.imgs
-      y = data.s.labels
+    # images and labels
+    if isinstance(data, Dataset):
+      # when using Meta-dataset
+      x = data.imgs  # [n_cls*n_ins, 3, 84, 84]
+      y = data.labels  # [n_cls*n_ins]
+    elif isinstance(data, Episode):
+      # when using customized bi-level dataset
+      x = data.concatenated.imgs
+      y = data.concatenated.labels
+    else:
+      raise Exception()
 
     # funtional forward
-    x = self._forward(x, params).squeeze()  # [n_cls*n_ins, n_cls, 1, 1]
+    x_embed = self._forward(x, params).squeeze()  # [n_cls*n_ins, n_cls, 1, 1]
+    x_embed_s = x_embed[:(x_embed.size(0)//2)]
+    x_embed_q = x_embed[(x_embed.size(0)//2):]
 
-    if self.mode == 'metric':
-      x = self._metric_based_logit(x, data.q, params)
+    classwise_fn = data.q.get_view_classwise_fn()
+    pairwise_dist = self._pairwise_dist(x_embed_s, x_embed_q, classwise_fn)
+
+    if self.mode == 'fc':
+      w, b = params[f'last_conv.weight'], params[f'last_conv.bias']
+      logits = F.conv2d(x_embed, w, b, 3).squeeze()
+    elif self.mode == 'metric':
+      logits = -pairwise_dist.sum(dim=2)
       y = data.q.labels
-
-    # import pdb; pdb.set_trace()
+    else:
+      raise Exception()
 
     if debug:
       pdb.set_trace()
 
-    # loss
-    x = F.log_softmax(x, dim=1)  # [n_cls*n_ins, n_cls]
-    loss = self.nll_loss(x, y)  # [n_cls*n_ins]
-
+    mask = None if hard_mask and self.mode == 'metric' else mask
+    pairwise_dist = classwise_fn(pairwise_dist).mean(dim=1)
     return ModelOutput(
         params_name=params.name,
         dataset_name=data.name,
         n_classes=data.n_classes,
-        loss_sample=loss,
-        log_softmax=x,
-        label=y,
-        mask=mask)
+        pairwise_dist=pairwise_dist,
+        logits=logits,
+        labels=y,
+        mask=mask,
+        )

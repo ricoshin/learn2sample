@@ -5,15 +5,20 @@ from collections import OrderedDict
 import gin
 import numpy as np
 import torch
+import torch.multiprocessing
 from loader.loader import EpisodeIterator
+from loader.meta_dataset import (MetaDataset, MetaMultiDataset,
+                                 PseudoMetaDataset)
 from loader.metadata import Metadata
-from loader.meta_dataset import MetaDataset, MetaMultiDataset, PseudoMetaDataset
 from nn.model import Model
+from nn.output import ModelOutput
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.color import Color
 from utils.result import ResultDict, ResultFrame
 from utils.utils import Printer
+
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 C = utils.getCudaManager('default')
 sig_1 = utils.getSignalCatcher('SIGINT')
@@ -40,15 +45,24 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   if mode != 'train' and unroll_steps is not None:
     raise Warning("unroll_steps has no effect when mode mode!='train'.")
 
-  samples_per_class = 2
+  samples_per_class = 3
   train = True if mode == 'train' else False
   force_base = True
   model_mode = 'metric'
+  # split_method = 'inclusive'
+  split_method = 'exclusive'
+  hard_mask = False
 
-  # meta-support: 30 / meta-query: 70 classes
-  
-  meta_support, remainder = data.split_class(0.1)
-  meta_query, _ = remainder.split_class(0.5)
+  # 100 classes in total
+  if split_method == 'exclusive':
+    meta_support, remainder = data.split_class(0.1)  # 10 classes
+    meta_query = remainder.sample_class(50)  # 50 classes
+    # meta_support, meta_query = data.split_class(0.3)  # 30 : 70 classes
+  elif split_method == 'inclusive':
+    subdata = data.sample_class(10)  # 50 classes
+    meta_support, meta_query = subdata.split_instance(0.5)  # 5:5 instances
+  else:
+    raise Exception()
 
   if train:
     if meta_batchsize > 0:
@@ -68,13 +82,12 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
   for i in range(1, outer_steps + 1):
     outer_loss = 0
-
-    # mask generator
-    mask = out_s_loss_masked = sampler.mask_gen.init_mask(
-      len(meta_support), samples_per_class)
+    # initialize sampler
+    sampler.initialize()
     # initialize base learner
-    model = Model(len(meta_support), mode=model_mode)
-    params = model.get_init_params('ours')
+    model_fc = Model(len(meta_support), mode='fc')
+    model_metric = Model(len(meta_support), mode='metric')
+    params = C(model_fc.get_init_params('ours'))
 
     if not train or force_base:
       """baseline 0: naive single task learning
@@ -86,14 +99,14 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
     result_dict = ResultDict()
     episode_iterator = EpisodeIterator(
-      support=meta_support,
-      query=meta_query,
-      split_ratio=0.5,
-      resample_every_episode=True,
-      inner_steps=inner_steps,
-      samples_per_class=samples_per_class,
-      num_workers=2,
-      pin_memory=True,
+        support=meta_support,
+        query=meta_query,
+        split_ratio=0.5,
+        resample_every_iteration=True,
+        inner_steps=inner_steps,
+        samples_per_class=samples_per_class,
+        num_workers=4,
+        pin_memory=True,
     )
     episode_iterator.sample_episode()
 
@@ -101,67 +114,65 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       # task encoding (very first step and right after a meta-update)
       if (k == 1) or (train and (k - 1) % unroll_steps == 0):
         with torch.set_grad_enabled(train):
-          x = sampler.encoder(meta_s.concatenated.imgs, meta_s.n_classes)
-
-      # generate mask
-      with torch.set_grad_enabled(train):
-        x, mask, out_s_loss_masked = C([x, mask, out_s_loss_masked], 1)
-        mask, lr = sampler.mask_gen(x, mask, out_s_loss_masked)
-
+          out_embed = model_metric(meta_s, params)
+          mask, lr = sampler(
+            pairwise_dist=out_embed.pairwise_dist,
+            classwise_loss=out_embed.loss,
+            classwise_acc=out_embed.acc,
+            n_classes=out_embed.n_classes,
+            )
       # use learned learning rate if available
       #   inner_lr: preset / lr: learned
       lr = inner_lr if lr is None else lr
 
       # train on support set
       params, mask = C([params, mask], 2)
-      out_s = model(meta_s, params, mask)
+      out_s = model_fc(meta_s, params, mask=mask, hard_mask=hard_mask)
       out_s_loss_masked = out_s.loss_masked
 
       # inner gradient step
       out_s_loss_masked_mean, lr = C([out_s.loss_masked_mean, lr], 2)
-      params = params.sgd_step(out_s_loss_masked_mean, lr, 'second')
+      params = params.sgd_step(
+        out_s_loss_masked_mean, lr, 'second', detach_param=True)
 
       # test on query set
       with torch.set_grad_enabled(train):
         params = C(params, 3)
-        out_q = model(meta_q, params, mask=None)
+        out_q = model_metric(meta_q, params)
 
       if not train or force_base:
         # feed support set (baseline)
-        out_s_b0 = model(meta_s, params_b0, None)
-        out_s_b1 = model(meta_s, params_b1, None)
+        out_s_b0 = model_fc(meta_s, params_b0)
+        out_s_b1 = model_fc(meta_s, params_b1)
 
         # attach mask to get loss_s
         out_s_b1.attach_mask(mask)
 
         # inner gradient step (baseline)
         params_b0 = params_b0.sgd_step(
-          out_s_b0.loss.mean(), inner_lr, 'no_grad')
+            out_s_b0.loss.mean(), inner_lr, 'no_grad')
         params_b1 = params_b1.sgd_step(
-          out_s_b1.loss_scaled_mean, lr, 'no_grad')
+            out_s_b1.loss_scaled_mean, lr, 'no_grad')
 
         with torch.no_grad():
           # test on query set
-          out_q_b0 = model(meta_q, params_b0, mask=None)
-          out_q_b1 = model(meta_q, params_b1, mask=None)
+          out_q_b0 = model_metric(meta_q, params_b0)
+          out_q_b1 = model_metric(meta_q, params_b1)
 
-        # record result
-        result_dict.append(
-          outer_step=epoch * i, inner_step=k,
-          **out_s.as_dict(), **out_q.as_dict(),
-          **out_s_b0.as_dict(), **out_s_b1.as_dict(),
-          **out_q_b0.as_dict(), **out_q_b1.as_dict())
-        ### end of inner steps (k) ###
+      outs = [out_s, out_s_b0, out_s_b1, out_q, out_q_b0, out_q_b1]
+      # record result
+      result_dict.append(
+        outer_step=epoch * i, inner_step=k, **ModelOutput.as_merged_dict(outs))
 
       # append to the dataframe
       result_frame = result_frame.append_dict(
-        result_dict.index_all(-1).mean_all(-1))
+          result_dict.index_all(-1).mean_all(-1))
 
       # logging
       if k % log_steps == 0:
         # print info
         msg = Printer.step_info(
-          epoch, mode, i, outer_steps, k, inner_steps, lr)
+            epoch, mode, i, outer_steps, k, inner_steps, lr)
         # msg += Printer.way_shot_query(epi)
         # print mask
         if not sig_1.is_active() and log_mask:
@@ -170,12 +181,13 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         msg += Printer.outputs([out_s, out_q], sig_1.is_active())
         if not train or force_base:
           msg += Printer.outputs(
-            [out_s_b0, out_q_b0, out_s_b1, out_q_b1], sig_1.is_active())
+              [out_s_b0, out_q_b0, out_s_b1, out_q_b1], sig_1.is_active())
         print(msg)
 
       # to debug in the middle of running process.
       if k == inner_steps and sig_2.is_active():
-        import pdb; pdb.set_trace()
+        import pdb
+        pdb.set_trace()
 
       # compute outer gradient
       if train and (k % unroll_steps == 0 or k == inner_steps):
@@ -184,8 +196,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         outer_loss = 0
         params.detach_().requires_grad_()
         out_s_loss_masked.detach_()
-        sampler.detach_()
-        mask.detach_()
+        mask = mask.detach()
 
       if not train:
         params.requires_grad_()
@@ -194,8 +205,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       if train and update_steps and k % update_steps == 0:
         outer_optim.step()
         sampler.zero_grad()
-      ### end of meta minibatch (j) ###
-
+      ### end of inner steps (k) ###
 
     if train and update_epochs and i % update_epochs == 0:
       outer_optim.step()
@@ -221,10 +231,10 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       meta_s.s.save_fig(f'imgs/meta_support', save_path, i)
       meta_q.s.save_fig(f'imgs/meta_query', save_path, i)
       result_dict['ours_s_mask'].save_fig(f'imgs/masks', save_path, i)
-      result_dict.get_items(['ours_s_mask', 'ours_s_loss',
-        'ours_s_loss_masked', 'b0_s_loss', 'b1_s_loss',
-        'ours_q_loss', 'b0_q_loss', 'b1_q_loss']).save_csv(
-          f'classwise/{mode}', save_path, i)
+      result_dict.get_items(
+        ['ours_s_mask', 'ours_s_loss', 'ours_s_loss_masked', 'b0_s_loss',
+         'b1_s_loss', 'ours_q_loss', 'b0_q_loss', 'b1_q_loss']
+      ).save_csv(f'classwise/{mode}', save_path, i)
 
     # distinguishable episodes
     if not i == outer_steps:
