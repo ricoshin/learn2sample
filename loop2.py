@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.color import Color
 from utils.result import ResultDict, ResultFrame
-from utils.utils import Printer
+from utils.helpers import InnerStepScheduler, Printer
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -59,18 +59,9 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
     2: MaskMode.CONCRETE,
     }[2]
 
-  def inner_step_scheduler(cur_outer_step):
-    """when cur_outer_step reaches to anneal_outer_steps, inner_steps """
-    assert 0 <= anneal_outer_steps <= outer_steps
-    if cur_outer_step < anneal_outer_steps:
-      r = cur_outer_step / anneal_outer_steps
-      cur_inner_steps = int(inner_steps * r)
-    else:
-      cur_inner_steps = inner_steps
-    if not anneal_outer_steps == 0:
-      print('Inner step scheduled : '
-            f'{cur_inner_steps}/{inner_steps} ({r*100:5.2f}%)')
-    return cur_inner_steps
+  # scheduler
+  inner_step_scheduler = InnerStepScheduler(
+    outer_steps, inner_steps, anneal_outer_steps)
 
   # 100 classes in total
   if split_method == 'exclusive':
@@ -103,7 +94,6 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   for i in range(1, outer_steps + 1):
     outer_loss = 0
     result_dict = ResultDict()
-    scheduled_inner_steps = inner_step_scheduler(i)
 
     # initialize sampler
     sampler.initialize()
@@ -127,7 +117,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
     # episode iterator
     episode_iterator = EpisodeIterator(
-        inner_steps=scheduled_inner_steps,
+        inner_steps=inner_step_scheduler(i, verbose=True),
         support=meta_support.sample_class(10),
         query=meta_query.sample_class(10),
         split_ratio=0.5,
@@ -154,7 +144,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         # mask = mask_.rsample() if concrete_mask else mask_
 
       # use learned learning rate if available
-      lr = inner_lr if lr is None else lr  # inner_lr: preset / lr: learned
+      # lr = inner_lr if lr is None else lr  # inner_lr: preset / lr: learned
 
       # train on support set
       params, mask = C([params, mask], 2)
@@ -165,7 +155,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       # inner gradient step
       out_s_loss_masked_mean, lr = C([out_s.loss_masked_mean, lr], 2)
       params = params.sgd_step(
-          out_s_loss_masked_mean, lr, second_order=True, detach_param=True)
+          out_s_loss_masked_mean, lr, second_order=True, detach_param=False)
 
       # baseline
       if not train or force_base:
@@ -178,7 +168,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
         # inner gradient step (baseline)
         params_b0 = params_b0.sgd_step(out_s_b0.loss.mean(), inner_lr)
-        params_b1 = params_b1.sgd_step(out_s_b1.loss_scaled_mean, lr)
+        params_b1 = params_b1.sgd_step(out_s_b1.loss_scaled_mean, lr.detach())
 
       del meta_s
       meta_q = C(meta_q)
@@ -211,7 +201,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       if k % log_steps == 0:
         # print info
         msg = Printer.step_info(
-            epoch, mode, i, outer_steps, k, scheduled_inner_steps, lr)
+            epoch, mode, i, outer_steps, k,  inner_step_scheduler(i), lr)
         # msg += Printer.way_shot_query(epi)
         # print mask
         if not sig_1.is_active() and log_mask:
@@ -233,6 +223,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         params.detach_().requires_grad_()
         out_s_loss_masked.detach_()
         mask = mask.detach()
+        lr = lr.detach()
 
       if not train:
         # when params is not leaf node created by user,

@@ -25,7 +25,7 @@ valid/loop.outer_steps = 50
 test/loop.outer_steps = 600
 
 # loop: only for meta-training
-train/loop.unroll_steps = 10
+train/loop.unroll_steps = 8
 train/loop.meta_batchsize = 0
 
 # sampler

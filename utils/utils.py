@@ -14,8 +14,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
-from loader.episode import Episode
-from nn.output import ModelOutput
 from tensorboardX import SummaryWriter
 
 _tensor_managers = {}
@@ -248,47 +246,3 @@ def prepare_dir(gin_path):
   shutil.copytree(os.path.abspath(os.path.curdir), code_path,
                   ignore=lambda src, names: {'.git', '__pycahe__', 'result'})
   return save_path
-
-
-class Printer():
-  """Collection of printing functions."""
-  @staticmethod
-  def step_info(epoch, mode, out_step_cur, out_step_max, in_step_cur,
-                in_step_max, lr):
-    lr = lr.tolist()[0] if isinstance(lr, torch.Tensor) else lr
-    return (f'[{mode}|epoch:{epoch:2d}]'
-            f'[out:{out_step_cur:3d}/{out_step_max}|'
-            f'in:{in_step_cur:4d}/{in_step_max}][{lr:4.3f}]')
-
-  @staticmethod
-  def way_shot_query(dataset):
-    assert isinstance(episode, Episode)
-    return (f'W/S/Q:{episode.n_classes:2d}/{episode.s.n_samples:2d}/'
-            f'{episode.q.n_samples:2d}|')
-
-  @staticmethod
-  def colorized_mask(mask, min=0.0, max=1.0, multi=100, fmt='3d', vis_num=20,
-                     colors=[160, 166, 172, 178, 184, 190]):
-    out_str = []
-    reset = "\033[0m"
-    masks = mask.squeeze().tolist()
-    if len(masks) > vis_num:
-      id_offset = len(masks) / vis_num
-    else:
-      id_offset = 1
-      vis_num = len(masks)
-    for i in range(vis_num):
-      m = masks[int(i * id_offset)] * multi
-      color_offset = (max - min) * multi / len(colors)
-      color = colors[int(m // color_offset) if int(m // color_offset)
-                     < len(colors) else -1]
-      out_str.append(f"\033[38;5;{str(color)}m" +
-                     "%%%s" % fmt % int(m) + reset)
-      # import pdb; pdb.set_trace()
-    return f'[{"|".join(out_str)}]'
-
-  @staticmethod
-  def outputs(outputs, print_conf):
-    assert isinstance(outputs, (list, tuple))
-    assert(all([isinstance(out, ModelOutput) for out in outputs]))
-    return "".join([out.to_text(print_conf) for out in outputs])
