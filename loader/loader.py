@@ -79,6 +79,7 @@ class EpisodeIterator(object):
     ss, sq = self.support.split_instance(self.split_ratio)
     qs, qq = self.query.split_instance(self.split_ratio)
     self._loaders = self.get_loaders([ss, sq, qs, qq])
+    return self
 
   def get_loader(self, metadata):
     dataset = DataFromMetadata(metadata)
@@ -103,4 +104,4 @@ class EpisodeIterator(object):
       ss, sq, qs, qq = [loader.next() for loader in self.loaders]
       meta_s = Episode.from_tensors(ss, sq, 'Support')
       meta_q = Episode.from_tensors(qs, qq, 'Query')
-      yield C(meta_s), C(meta_q)
+      yield meta_s, meta_q

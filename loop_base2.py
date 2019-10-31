@@ -16,6 +16,8 @@ from utils.color import Color
 from utils.result import ResultDict, ResultFrame
 from utils.utils import Printer
 
+torch.multiprocessing.set_sharing_strategy('file_system')
+
 C = utils.getCudaManager('default')
 sig_1 = utils.getSignalCatcher('SIGINT')
 sig_2 = utils.getSignalCatcher('SIGTSTP')
@@ -41,7 +43,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   if mode != 'train' and unroll_steps is not None:
     raise Warning("unroll_steps has no effect when mode mode!='train'.")
 
-  samples_per_class = 10
+  samples_per_class = 3
   train = True if mode == 'train' else False
   force_base = True
   model_mode = 'metric'
@@ -57,7 +59,6 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
     meta_support, meta_query = subdata.split_instance(0.5)  # 5:5 instances
   else:
     raise Exception()
-
 
   if train:
     if meta_batchsize > 0:
@@ -92,7 +93,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       support=meta_support,
       query=meta_query,
       split_ratio=0.5,
-      resample_every_episode=True,
+      resample_every_iteration=True,
       inner_steps=inner_steps,
       samples_per_class=samples_per_class,
       num_workers=2,
@@ -141,7 +142,6 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       # append to the dataframe
       result_frame = result_frame.append_dict(
         result_dict.index_all(-1).mean_all(-1))
-
 
       # logging
       if k % log_steps == 0:

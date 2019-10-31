@@ -2,11 +2,12 @@ import pdb
 
 import torch
 import torch.nn as nn
+from loader.episode import Dataset, Episode
 from nn.output import ModelOutput
+from nn.sampler2 import MaskMode
 from torch.nn import functional as F
 from utils.torchviz import make_dot
 from utils.utils import MyDataParallel
-from loader.episode import Dataset, Episode
 
 
 class Params(object):
@@ -63,23 +64,23 @@ class Params(object):
   def param_names(self):
     return list(self._dict.keys())
 
-  def sgd_step(self, loss, lr, grad_mode="no_grad", detach_param=False,
-               debug=False):
-    assert grad_mode in ['no_grad', 'first', 'second']
+  def sgd_step(
+          self, loss, lr, second_order=False, detach_param=True, debug=False):
+    """Default setting is the same as the one of vanilla SGD step."""
     params = self._dict
-    with torch.set_grad_enabled(grad_mode != 'no_grad'):
-      grads = torch.autograd.grad(
-          loss, params.values(),
-          create_graph=(grad_mode == 'second'),
-          allow_unused=True,
-          )
-      if debug:
-        pdb.set_trace()
-      new_params = {}
-      for (name, param), grad in zip(params.items(), grads):
-        if detach_param:
-          param = param.detach()
-        new_params[name] = param - lr * grad
+    grads = torch.autograd.grad(
+        outputs=loss,
+        inputs=params.values(),
+        create_graph=second_order,
+        allow_unused=True,
+    )
+    if debug:
+      pdb.set_trace()
+    new_params = {}
+    for (name, param), grad in zip(params.items(), grads):
+      if detach_param:
+        param = param.detach()
+      new_params[name] = param - lr * grad
     return Params(new_params, self.name).requires_grad_()
 
 
@@ -108,7 +109,8 @@ class Model(nn.Module):
       layers.update([
           [f'conv_{i}', nn.Conv2d(self.ch[i], self.ch[i + 1], self.kn[i])],
           # [f'norm_{i}', nn.GroupNorm(self.n_group, self.ch[i + 1])],
-          [f'bn_{i}', nn.BatchNorm2d(self.ch[i + 1], track_running_stats=False)],
+          [f'bn_{i}', nn.BatchNorm2d(
+              self.ch[i + 1], track_running_stats=False)],
           [f'relu_{i}', nn.ReLU(inplace=True)],
           [f'mp_{i}', nn.MaxPool2d(2, 2)],
       ])
@@ -132,7 +134,7 @@ class Model(nn.Module):
     return x
 
   def _pairwise_dist(self, support_embed, query_embed, classwise_fn):
-    flatten = lambda x: x.view(x.size(0), -1)
+    def flatten(x): return x.view(x.size(0), -1)
     # prototypes: [n_classes, embed_dim]
     proto_types = classwise_fn(flatten(support_embed)).mean(dim=1)
     # query embedings: [n_samples, embed_dim]
@@ -144,7 +146,7 @@ class Model(nn.Module):
     pairwise_dist = (proto_types - query_embed)**2
     return pairwise_dist  # [n_samples, n_classes, dim]
 
-  def forward(self, data, params, mask=None, hard_mask=False, debug=False):
+  def forward(self, data, params, mask=None, mask_mode=None, debug=False):
     """
     Args:
       data (loader.Dataset or loader.Episode):
@@ -176,14 +178,20 @@ class Model(nn.Module):
       nn.output.ModelOutput
     """
     assert isinstance(params, (Params, MyDataParallel))
+    assert (mask is None) == (mask_mode is None)
+    if mask_mode is not None:
+      assert isinstance(mask_mode, MaskMode)
 
-    if hard_mask and mask is not None:
+    if mask_mode == MaskMode.DISCRETE:
       # data level masking:
       #  in case of prototypical network, there cannot be prototypes
       #  when certain classes are masked out, then it has to be like
       #  there were not those classes from the beginning.
       mask = (mask > 0.01).float()
       data = data.masked_select(mask)
+      if self.mode == 'metric':
+        # metric-based method does NOT need mask any longer
+        mask = None
 
     # images and labels
     if isinstance(data, Dataset):
@@ -199,8 +207,8 @@ class Model(nn.Module):
 
     # funtional forward
     x_embed = self._forward(x, params).squeeze()  # [n_cls*n_ins, n_cls, 1, 1]
-    x_embed_s = x_embed[:(x_embed.size(0)//2)]
-    x_embed_q = x_embed[(x_embed.size(0)//2):]
+    x_embed_s = x_embed[:(x_embed.size(0) // 2)]
+    x_embed_q = x_embed[(x_embed.size(0) // 2):]
 
     classwise_fn = data.q.get_view_classwise_fn()
     pairwise_dist = self._pairwise_dist(x_embed_s, x_embed_q, classwise_fn)
@@ -217,8 +225,10 @@ class Model(nn.Module):
     if debug:
       pdb.set_trace()
 
-    mask = None if hard_mask and self.mode == 'metric' else mask
+    # average distance over the query set
     pairwise_dist = classwise_fn(pairwise_dist).mean(dim=1)
+
+    # returns output
     return ModelOutput(
         params_name=params.name,
         dataset_name=data.name,
@@ -227,4 +237,4 @@ class Model(nn.Module):
         logits=logits,
         labels=y,
         mask=mask,
-        )
+    )

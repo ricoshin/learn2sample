@@ -255,6 +255,7 @@ class Printer():
   @staticmethod
   def step_info(epoch, mode, out_step_cur, out_step_max, in_step_cur,
                 in_step_max, lr):
+    lr = lr.tolist()[0] if isinstance(lr, torch.Tensor) else lr
     return (f'[{mode}|epoch:{epoch:2d}]'
             f'[out:{out_step_cur:3d}/{out_step_max}|'
             f'in:{in_step_cur:4d}/{in_step_max}][{lr:4.3f}]')

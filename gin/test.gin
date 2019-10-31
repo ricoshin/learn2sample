@@ -18,14 +18,14 @@ meta_train.outer_lr = 0.0001
 meta_train.tolerance = 2
 
 # loop: outer/inner steps
-loop.inner_lr = 0.01
-loop.inner_steps = 500
-train/loop.outer_steps = 50
+loop.inner_lr = 0.001
+loop.inner_steps = 1000
+train/loop.outer_steps = 100
 valid/loop.outer_steps = 50
 test/loop.outer_steps = 600
 
 # loop: only for meta-training
-train/loop.unroll_steps = 5
+train/loop.unroll_steps = 10
 train/loop.meta_batchsize = 0
 
 # sampler

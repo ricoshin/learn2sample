@@ -83,7 +83,7 @@ class ModelOutput(object):
     """confidence."""
     if self._conf is None:
       pred = self.element_conf.max(dim=1)[0]  # prediction
-      actual = self.element_conf.gather(1, self.label.view(-1, 1))  # label
+      actual = self.element_conf.gather(1, self.labels.view(-1, 1))  # label
       true = pred[self.is_true]  # correct prediction
       false = pred[self.is_false]   # wrong prediction
       self._conf = dict(pred=pred.mean(), actual=actual.mean(),
@@ -140,7 +140,7 @@ class ModelOutput(object):
             for i in range(len(input.size()))]
     weight = weight.view(size)
     x_shifted = input - input.max(dim=dim, keepdim=True)[0]
-    log_numer = x_shifted + (weight + eps).log()
+    log_numer = x_shifted + (weight.detach() + eps).log()
     log_denom = log_numer.exp().sum(dim=dim, keepdim=True).log()
     if not mask_numer:
       log_numer = x_shifted
@@ -150,7 +150,7 @@ class ModelOutput(object):
   def weighted_cross_entropy(
     self, input, target, weight, dim, reduction, eps=1e-12):
     log_dropmax_ = self.weighted_log_softmax(
-      input, weight, dim, eps, mask_numer=False)
+      input, weight, dim, eps, mask_numer=True)
     xent = F.nll_loss(log_dropmax_, target, reduction='none')
     return xent.view(self.n_classes, -1) * weight.view(-1, 1)
 
