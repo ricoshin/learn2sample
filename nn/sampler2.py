@@ -31,28 +31,31 @@ class Sampler(ParallelizableModule):
     super(Sampler, self).__init__()
     # arguments
     h_for_each = 3 * 3 * 64
-    moment = [.0, .5, .9, .99, .999]
     n_timecode = 3
+    moment = [.0, .5, .9, .99, .999]
     n_shared_features = len(moment) * 2 + n_timecode
     n_relative_features = 2
-    # attributes
+    # module attributes
     self.pairwse_attention = nn.Linear(h_for_each, 1)  # TODO: automatic
     self.shared_encoder = nn.Linear(n_shared_features, h_for_each)
     self.relative_encoder = nn.Linear(n_relative_features, h_for_each)
     self.mask_generator = nn.Linear(h_for_each * 2, 2)
     self.lr_generator = nn.Linear(h_for_each * 2, 1)
+    # functionals
     self.softmax = nn.Softmax(dim=1)
     self.sigmoid = nn.Sigmoid()
     self.tanh = nn.Tanh()
+    # misc
     self.loss_mean = self.acc_mean = None  # for running mean tracking
-    self.m = C(torch.tensor(moment))  # running mean momentum
+    self.new_momentum = lambda: C(torch.tensor(moment))
+    self.m = self.new_momentum()  # running mean momentum
     self.t = 0
     self.t_scales = np.linspace(1, np.log(1000) / np.log(10), n_timecode)
     self.t_encoder = lambda t: [
         np.tanh(3 * t / 10**s - 1) for s in self.t_scales]
 
-  def forward(self, pairwise_dist, classwise_loss, classwise_acc, n_classes,
-              mask_mode):
+  def forward(
+    self, pairwise_dist, classwise_loss, classwise_acc, n_classes, mask_mode):
     assert isinstance(mask_mode, MaskMode)
     # attention-based pairwise representation
     atten = self.softmax(self.pairwse_attention(pairwise_dist))
@@ -130,6 +133,7 @@ class Sampler(ParallelizableModule):
 
   def initialize(self):
     self.t = 0  # timestamp
+    self.m = self.new_momentum()
     self.loss_mean = self.acc_mean = None  # running mean
 
   def save(self, save_path=None):
