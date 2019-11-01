@@ -47,14 +47,19 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   # sampler.mask_gen = MyDataParallel(sampler.mask_gen)
   # sampler.mask_gen.data_parallel_recursive_()
 
-  outer_optim = {'sgd': 'SGD', 'adam': 'Adam'}[outer_optim.lower()]
-  outer_optim = getattr(torch.optim, outer_optim)(
-      sampler.parameters(), lr=outer_lr)
+  #####################################################################
+  is_RL = True
+  if not is_RL:
+    outer_optim = {'sgd': 'SGD', 'adam': 'Adam'}[outer_optim.lower()]
+    outer_optim = getattr(torch.optim, outer_optim)(
+        sampler.parameters(), lr=outer_lr)
+  #####################################################################
 
   if save_path:
     writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
 
   for i in range(1, meta_epoch + 1):
+    #####################################################################
     # meta train
     sampler, result_train = train_loop(
         data=meta_data_train,
@@ -62,6 +67,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
         outer_optim=outer_optim,
         save_path=save_path,
         epoch=i,
+        is_RL=is_RL
     )
 
     # meta valid
@@ -70,7 +76,9 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
         sampler=sampler,
         save_path=save_path,
         epoch=i,
+        is_RL=is_RL
     )
+    #####################################################################
 
     loss = result_valid.get_best_loss().mean()
     acc = result_valid.get_best_acc().mean()

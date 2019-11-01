@@ -181,8 +181,10 @@ class Model(nn.Module):
     assert (mask is None) == (mask_mode is None)
     if mask_mode is not None:
       assert isinstance(mask_mode, MaskMode)
-
-    if mask_mode == MaskMode.DISCRETE:
+    #####################################################################
+    if (mask_mode == MaskMode.DISCRETE) or \
+    (mask_mode == MaskMode.RL and mask is not None) :
+    #####################################################################
       # data level masking:
       #  in case of prototypical network, there cannot be prototypes
       #  when certain classes are masked out, then it has to be like

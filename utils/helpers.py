@@ -66,5 +66,8 @@ class Printer():
   @staticmethod
   def outputs(outputs, print_conf):
     assert isinstance(outputs, (list, tuple))
-    assert(all([isinstance(out, ModelOutput) for out in outputs]))
+    ###########################################################
+    from nn.reinforcement import Policy
+    assert(all([isinstance(out, (ModelOutput, Policy)) for out in outputs]))
+    ###################################################################
     return "".join([out.to_text(print_conf) for out in outputs])

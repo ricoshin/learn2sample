@@ -18,6 +18,9 @@ from utils import utils
 from utils.color import Color
 from utils.result import ResultDict, ResultFrame
 from utils.helpers import InnerStepScheduler, Printer
+#####################################################################
+from nn.reinforcement import Environment, Policy
+#####################################################################
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -26,10 +29,12 @@ sig_1 = utils.getSignalCatcher('SIGINT')
 sig_2 = utils.getSignalCatcher('SIGTSTP')
 
 
+#####################################################################
 @gin.configurable
 def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
          log_mask=True, unroll_steps=None, meta_batchsize=0, sampler=None,
-         epoch=1, outer_optim=None, save_path=None):
+         epoch=1, outer_optim=None, save_path=None, is_RL=False):
+#####################################################################
   """Args:
       meta_batchsize(int): If meta_batchsize |m| > 0, gradients for multiple
         unrollings from each episodes size of |m| will be accumulated in
@@ -53,11 +58,14 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   samples_per_class = 3
   anneal_outer_steps = 50
   split_method = {1: 'inclusive', 2: 'exclusive'}[1]
+  #####################################################################
   mask_mode = {
     0: MaskMode.SOFT,
     1: MaskMode.DISCRETE,
     2: MaskMode.CONCRETE,
-    }[2]
+    3: MaskMode.RL,
+    }[3 if is_RL else 2]
+  #####################################################################
 
   # scheduler
   inner_step_scheduler = InnerStepScheduler(
@@ -91,6 +99,12 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   if save_path:
     writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
 
+  ##################################
+  if is_RL:
+    env = Environment()
+    policy = Policy(sampler)
+  ##################################
+
   for i in range(1, outer_steps + 1):
     outer_loss = 0
     result_dict = ResultDict()
@@ -106,6 +120,12 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
     else:
       model_s = model_q
       params = C(model_s.get_init_params('ours'))
+
+    ##################################
+    if is_RL:
+      policy.reset()
+    # env.reset()
+    ##################################
 
     if not train or force_base:
       """baseline 0: naive single task learning
@@ -130,9 +150,10 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
     for k, (meta_s, meta_q) in enumerate(episode_iterator, 1):
       outs = []
       meta_s = C(meta_s)
+      #####################################################################
       with torch.set_grad_enabled(train):
         # task encoding (very first step and right after a meta-update)
-        if (k == 1) or (train and (k - 1) % unroll_steps == 0):
+        if (k == 1) or (train and (k - 1) % unroll_steps == 0) or (neg_rw):
           out_for_sampler = model_s(meta_s, params)
           mask, lr = sampler(
               pairwise_dist=out_for_sampler.pairwise_dist,
@@ -142,20 +163,38 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
               mask_mode=mask_mode,
           )
         # mask = mask_.rsample() if concrete_mask else mask_
+          if is_RL:
+            mask, neg_rw = policy.predict(mask)
+            if neg_rw:
+              # TODO fix iteratively [0 class]s are sampled. 
+              print('[!] select 0 class!')
+              policy.rewards.append(neg_rw)
+              import pdb; pdb.set_trace()
+              mask = None
+              # policy.update()
+              continue
+      #####################################################################
 
       # use learned learning rate if available
       # lr = inner_lr if lr is None else lr  # inner_lr: preset / lr: learned
 
       # train on support set
       params, mask = C([params, mask], 2)
+      #####################################################################
       out_s = model_s(meta_s, params, mask=mask, mask_mode=mask_mode)
-      out_s_loss_masked = out_s.loss_masked
+      # out_s_loss_masked = out_s.loss_masked
       outs.append(out_s)
 
       # inner gradient step
-      out_s_loss_masked_mean, lr = C([out_s.loss_masked_mean, lr], 2)
+      out_s_loss_mean = out_s.loss.mean() if mask_mode == MaskMode.RL \
+                          else out_s.loss_masked_mean 
+      out_s_loss_mean, lr = C([out_s_loss_mean, lr], 2)
+
       params = params.sgd_step(
-          out_s_loss_masked_mean, lr, second_order=True, detach_param=False)
+          out_s_loss_mean, lr, 
+          second_order=False if is_RL else True, 
+          detach_param=True if is_RL else False)
+      #####################################################################
 
       # baseline
       if not train or force_base:
@@ -187,6 +226,13 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           outs.extend([out_q_b0, out_q_b1])
 
       del meta_q
+
+      ##################################
+      if is_RL:
+        reward = env.step(outs)
+        policy.rewards.append(reward)
+      ##################################
+
       # record result
       result_dict.append(
           outer_step=epoch * i,
@@ -206,6 +252,12 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         # print mask
         if not sig_1.is_active() and log_mask:
           msg += Printer.colorized_mask(mask, fmt="2d", vis_num=20)
+        
+      #####################################################################
+        if is_RL:
+          msg += Printer.outputs([policy], sig_1.is_active())
+      #####################################################################
+
         # print outputs (loss, acc, etc.)
         msg += Printer.outputs(outs, sig_1.is_active())
         print(msg)
@@ -217,30 +269,41 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
       # compute outer gradient
       if train and (k % unroll_steps == 0 or k == inner_steps):
-        outer_loss += out_q.loss.mean()
-        outer_loss.backward()
-        outer_loss = 0
-        params.detach_().requires_grad_()
-        out_s_loss_masked.detach_()
+      #####################################################################
+        if not is_RL:
+          outer_loss += out_q.loss.mean()
+          outer_loss.backward()
+          outer_loss = 0
+          params.detach_().requires_grad_()
+        out_s_loss_mean.detach()
+        # out_s_loss_masked.detach_()
         mask = mask.detach()
         lr = lr.detach()
+      #####################################################################
 
       if not train:
-        # when params is not leaf node created by user,
-        #   requires_grad attribute is False by default.
-        params.requires_grad_()
+        if not is_RL:
+          # when params is not leaf node created by user,
+          #   requires_grad attribute is False by default.
+          params.requires_grad_()
 
       # meta(outer) learning
       if train and update_steps and k % update_steps == 0:
         # when you have meta_batchsize == 0, update_steps == unroll_steps
-        outer_optim.step()
-        sampler.zero_grad()
+        if is_RL:
+          policy.update()
+        else:
+          outer_optim.step()
+          sampler.zero_grad()
       ### end of inner steps (k) ###
 
     if train and update_epochs and i % update_epochs == 0:
       # when you have meta_batchsize > 0, update_epochs == meta_batchsize
-      outer_optim.step()
-      sampler.zero_grad()
+      if is_RL:
+        policy.update()
+      else:
+        outer_optim.step()
+        sampler.zero_grad()
       if update_epochs:
         print(f'Meta-batchsize is {meta_batchsize}: Sampler updated.')
 

@@ -20,6 +20,7 @@ class MaskMode(Enum):
   SOFT = 0      # simple sigmoid, attention-like mask
   DISCRETE = 1  # hard, non-differentiable mask
   CONCRETE = 2  # different mask from CONCRETE distribution
+  RL = 3  # simple softmax delivered to policy network in RL
 
 
 @gin.configurable
@@ -106,15 +107,18 @@ class Sampler(ParallelizableModule):
     lr_logits = self.lr_generator(h_mean)
     lr = F.softplus(lr_logits) * 0.1
 
-    on_off_style = ['softmax', 'sigmoid'][1]  # TODO: global argument
+    #####################################################################
+    # on_off_style = ['softmax', 'sigmoid'][1]  # TODO: global argument
 
     # soft mask
     if mask_mode == MaskMode.SOFT:
-      if on_off_style == 'sigmoid':
-        mask = self.sigmoid(logits[:, 0])  # TODO: logit[:, 1] is redundant
-      elif on_off_style == 'softmax':
-        mask = self.softmax(logits, dim=1)[1]  # This guy is for RL case
+      # if on_off_style == 'sigmoid':
+      mask = self.sigmoid(mask_logits[:, 0])  # TODO: logit[:, 1] is redundant
+    elif mask_mode == MaskMode.RL:
+      # elif on_off_style == 'softmax':
+      mask = self.softmax(mask_logits)  # This guy is for RL case
     # discrete mask
+    #####################################################################
     elif mask_mode == MaskMode.DISCRETE:
       mask = lr_logits[:, 0].max(dim=1)[1]  # TODO: logit[:, 1] is redundant
     # concrete mask
