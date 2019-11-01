@@ -48,7 +48,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   # sampler.mask_gen.data_parallel_recursive_()
 
   #####################################################################
-  is_RL = True
+  is_RL = False
   if not is_RL:
     outer_optim = {'sgd': 'SGD', 'adam': 'Adam'}[outer_optim.lower()]
     outer_optim = getattr(torch.optim, outer_optim)(
