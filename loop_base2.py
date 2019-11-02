@@ -52,11 +52,11 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
   # 100 classes in total
   if split_method == 'exclusive':
-    meta_support, remainder = data.split_class(0.1)  # 10 classes
-    meta_query = remainder.sample_class(50)  # 50 classes
+    meta_support, remainder = data.split_classes(0.1)  # 10 classes
+    meta_query = remainder.sample_classes(50)  # 50 classes
   elif split_method == 'inclusive':
-    subdata = data.sample_class(10)  # 50 classes
-    meta_support, meta_query = subdata.split_instance(0.5)  # 5:5 instances
+    subdata = data.sample_classes(10)  # 50 classes
+    meta_support, meta_query = subdata.split_instances(0.5)  # 5:5 instances
   else:
     raise Exception()
 

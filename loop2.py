@@ -6,20 +6,22 @@ import gin
 import numpy as np
 import torch
 import torch.multiprocessing
-from loader.loader import EpisodeIterator
+from loader.loader import (BalancedBatchSampler, MetaEpisodeIterator,
+                           RandomBatchSampler)
 from loader.meta_dataset import (MetaDataset, MetaMultiDataset,
                                  PseudoMetaDataset)
 from loader.metadata import Metadata
 from nn.model import Model
 from nn.output import ModelOutput
-from nn.sampler2 import MaskMode
+#####################################################################
+from nn.reinforcement import Environment, Policy
+from nn.sampler2 import MaskDist, MaskMode, MaskUnit
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.color import Color
+from utils.helpers import InnerStepScheduler, Logger
 from utils.result import ResultDict, ResultFrame
-from utils.helpers import InnerStepScheduler, Printer
-#####################################################################
-from nn.reinforcement import Environment, Policy
+
 #####################################################################
 
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -27,14 +29,16 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 C = utils.getCudaManager('default')
 sig_1 = utils.getSignalCatcher('SIGINT')
 sig_2 = utils.getSignalCatcher('SIGTSTP')
-
+logger = Logger()
 
 #####################################################################
+
+
 @gin.configurable
 def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
          log_mask=True, unroll_steps=None, meta_batchsize=0, sampler=None,
          epoch=1, outer_optim=None, save_path=None, is_RL=False):
-#####################################################################
+  #####################################################################
   """Args:
       meta_batchsize(int): If meta_batchsize |m| > 0, gradients for multiple
         unrollings from each episodes size of |m| will be accumulated in
@@ -55,31 +59,46 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   force_base = True
   # TODO: to gin configuration
   fc_pulling = False  # does not support for now
-  samples_per_class = 3
+  class_balanced = False
+  if class_balanced:
+    classes_per_episode = 10
+    samples_per_class = 3
+  else:
+  batch_size = 128
+  sample_split_ratio = 0.5
+  # sample_split_ratio = None
   anneal_outer_steps = 50
+  concrete_resample = True
+  detach_param = False
   split_method = {1: 'inclusive', 2: 'exclusive'}[1]
+  sampler_type = {1: 'pre_sampler', 2: 'post_sampler'}[2]
   #####################################################################
-  mask_mode = {
-    0: MaskMode.SOFT,
-    1: MaskMode.DISCRETE,
-    2: MaskMode.CONCRETE,
-    3: MaskMode.RL,
-    }[3 if is_RL else 2]
+  mask_unit = {
+      0: MaskUnit.SAMPLE,
+      1: MaskUnit.CLASS,
+  }[0]
+  mask_dist = {
+      0: MaskDist.SOFT,
+      1: MaskDist.DISCRETE,
+      2: MaskDist.CONCRETE,
+      3: MaskDist.RL,
+  }[3 if is_RL else 2]
+  mask_mode = MaskMode(mask_unit, mask_dist)
   #####################################################################
 
   # scheduler
   inner_step_scheduler = InnerStepScheduler(
-    outer_steps, inner_steps, anneal_outer_steps)
+      outer_steps, inner_steps, anneal_outer_steps)
 
   # 100 classes in total
   if split_method == 'exclusive':
-    # meta_support, remainder = data.split_class(0.1)  # 10 classes
-    # meta_query = remainder.sample_class(50)  # 50 classes
-    meta_support, meta_query = data.split_class(1 / 5)  # 1(100) : 4(400)
-    # meta_support, meta_query = data.split_class(0.3)  # 30 : 70 classes
+    # meta_support, remainder = data.split_classes(0.1)  # 10 classes
+    # meta_query = remainder.sample_classes(50)  # 50 classes
+    meta_support, meta_query = data.split_classes(1 / 5)  # 1(100) : 4(400)
+    # meta_support, meta_query = data.split_classes(0.3)  # 30 : 70 classes
   elif split_method == 'inclusive':
-    # subdata = data.sample_class(10)  # 50 classes
-    meta_support, meta_query = data.split_instance(0.5)  # 5:5 instances
+    # subdata = data.sample_classes(10)  # 50 classes
+    meta_support, meta_query = data.split_instances(0.5)  # 5:5 instances
   else:
     raise Exception()
 
@@ -103,6 +122,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   if is_RL:
     env = Environment()
     policy = Policy(sampler)
+    neg_rw = None
   ##################################
 
   for i in range(1, outer_steps + 1):
@@ -135,44 +155,72 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       params_b0 = C(params.copy('b0'), 4)
       params_b1 = C(params.copy('b1'), 4)
 
+    if class_balanced:
+      batch_sampler = BalancedBatchSampler.get(class_size, sample_size)
+    else:
+      batch_sampler = RandomBatchSampler.get(batch_size)
     # episode iterator
-    episode_iterator = EpisodeIterator(
+    episode_iterator = MetaEpisodeIterator(
+        meta_support=meta_support,
+        meta_query=meta_query,
+        batch_sampler=batch_sampler,
+        match_inner_classes=match_inner_classes,
         inner_steps=inner_step_scheduler(i, verbose=True),
-        support=meta_support.sample_class(10),
-        query=meta_query.sample_class(10),
-        split_ratio=0.5,
-        resample_every_iteration=True,
-        samples_per_class=samples_per_class,
+        sample_split_ratio=sample_split_ratio,
         num_workers=4,
         pin_memory=True,
-    ).sample_episode()
+    )
 
-    for k, (meta_s, meta_q) in enumerate(episode_iterator, 1):
+    do_sample = True
+    for k, (meta_s, meta_q) in episode_iterator(do_sample):
       outs = []
-      meta_s = C(meta_s)
+      meta_s = meta_s.cuda()
+
       #####################################################################
-      with torch.set_grad_enabled(train):
+      if do_sample:
+        do_sample = False
         # task encoding (very first step and right after a meta-update)
-        if (k == 1) or (train and (k - 1) % unroll_steps == 0) or (neg_rw):
-          out_for_sampler = model_s(meta_s, params)
-          mask, lr = sampler(
-              pairwise_dist=out_for_sampler.pairwise_dist,
-              classwise_loss=out_for_sampler.loss,
-              classwise_acc=out_for_sampler.acc,
-              n_classes=out_for_sampler.n_classes,
-              mask_mode=mask_mode,
-          )
-        # mask = mask_.rsample() if concrete_mask else mask_
+        with torch.set_grad_enabled(train):
+          def feature_fn():
+            # determein whether to untilize model features
+            if sampler_type == 'post_sampler':
+              return model_s(meta_s, params)
+            elif sampler_type == 'pre_sampler':
+              return None
+          # sampler do the work!
+          mask, lr_ = sampler(mask_mode, feature_fn)
+
+          # out_for_sampler = model_s(meta_s, params, debug=do_sample)
+          # mask_, lr = sampler(
+          #     pairwise_dist=out_for_sampler.pairwise_dist,
+          #     classwise_loss=out_for_sampler.loss,
+          #     classwise_acc=out_for_sampler.acc,
+          #     n_classes=out_for_sampler.n_classes,
+          #     mask_mode=mask_mode,
+          # )
+          # sample from concrete distribution
+          #   while keeping original distribution for simple resampling
+          if mask_mode.dist is MaskDist.CONCRETE:
+            mask = mask_.rsample()
+          else:
+            mask = mask_
+
           if is_RL:
             mask, neg_rw = policy.predict(mask)
             if neg_rw:
-              # TODO fix iteratively [0 class]s are sampled. 
+              # TODO fix iteratively [0 class]s are sampled.
+              do_sample = True
               print('[!] select 0 class!')
               policy.rewards.append(neg_rw)
-              import pdb; pdb.set_trace()
-              mask = None
+              import pdb
+              pdb.set_trace()
               # policy.update()
               continue
+      else:
+        # we can simply resample masks when using concrete distribution
+        #   without seriously going through the sampler
+        if mask_mode.dist is MaskDist.CONCRETE and concrete_resample:
+          mask = mask_.rsample()
       #####################################################################
 
       # use learned learning rate if available
@@ -187,13 +235,14 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
       # inner gradient step
       out_s_loss_mean = out_s.loss.mean() if mask_mode == MaskMode.RL \
-                          else out_s.loss_masked_mean 
+          else out_s.loss_masked_mean
       out_s_loss_mean, lr = C([out_s_loss_mean, lr], 2)
 
       params = params.sgd_step(
-          out_s_loss_mean, lr, 
-          second_order=False if is_RL else True, 
-          detach_param=True if is_RL else False)
+          out_s_loss_mean, lr,
+          second_order=False if is_RL else True,
+          detach_param=True if is_RL else detach_param
+      )
       #####################################################################
 
       # baseline
@@ -209,8 +258,9 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
         params_b0 = params_b0.sgd_step(out_s_b0.loss.mean(), inner_lr)
         params_b1 = params_b1.sgd_step(out_s_b1.loss_scaled_mean, lr.detach())
 
-      del meta_s
-      meta_q = C(meta_q)
+      meta_s = meta_s.cpu()
+      meta_q = meta_q.cuda()
+
       # test on query set
       with torch.set_grad_enabled(train):
         params = C(params, 3)
@@ -225,19 +275,19 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
           out_q_b1 = model_q(meta_q, params_b1)
           outs.extend([out_q_b0, out_q_b1])
 
-      del meta_q
-
       ##################################
       if is_RL:
         reward = env.step(outs)
         policy.rewards.append(reward)
+        outs.append(policy)
       ##################################
 
       # record result
       result_dict.append(
           outer_step=epoch * i,
           inner_step=k,
-          **ModelOutput.as_merged_dict(outs))
+          **ModelOutput.as_merged_dict(outs)
+      )
 
       # append to the dataframe
       result_frame = result_frame.append_dict(
@@ -245,22 +295,13 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
       # logging
       if k % log_steps == 0:
-        # print info
-        msg = Printer.step_info(
+        logger.step_info(
             epoch, mode, i, outer_steps, k,  inner_step_scheduler(i), lr)
-        # msg += Printer.way_shot_query(epi)
-        # print mask
-        if not sig_1.is_active() and log_mask:
-          msg += Printer.colorized_mask(mask, fmt="2d", vis_num=20)
-        
-      #####################################################################
-        if is_RL:
-          msg += Printer.outputs([policy], sig_1.is_active())
-      #####################################################################
-
-        # print outputs (loss, acc, etc.)
-        msg += Printer.outputs(outs, sig_1.is_active())
-        print(msg)
+        logger.split_info(meta_support, meta_query, episode_iterator)
+        logger.colorized_mask(
+            mask, fmt="2d", vis_num=20, cond=not sig_1.is_active() and log_mask)
+        logger.outputs(outs, print_conf=sig_1.is_active())
+        logger.flush()
 
       # to debug in the middle of running process.
       if k == inner_steps and sig_2.is_active():
@@ -269,16 +310,15 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
       # compute outer gradient
       if train and (k % unroll_steps == 0 or k == inner_steps):
-      #####################################################################
+        #####################################################################
         if not is_RL:
           outer_loss += out_q.loss.mean()
           outer_loss.backward()
           outer_loss = 0
           params.detach_().requires_grad_()
-        out_s_loss_mean.detach()
-        # out_s_loss_masked.detach_()
         mask = mask.detach()
         lr = lr.detach()
+        do_sample = True
       #####################################################################
 
       if not train:

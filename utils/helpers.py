@@ -1,5 +1,7 @@
 import torch
 from loader.episode import Episode
+from loader.loader import MetaEpisodeIterator
+from loader.metadata import Metadata
 from nn.output import ModelOutput
 
 
@@ -26,25 +28,42 @@ class InnerStepScheduler():
     return cur_inner_steps
 
 
-class Printer():
+class Logger():
   """Collection of printing functions."""
-  @staticmethod
-  def step_info(epoch, mode, out_step_cur, out_step_max, in_step_cur,
+
+  def __init__(self):
+    self._log = ""
+
+  def flush(self):
+    print(self._log)
+    self._log = ""
+
+  def step_info(self, epoch, mode, out_step_cur, out_step_max, in_step_cur,
                 in_step_max, lr):
     lr = lr.tolist()[0] if isinstance(lr, torch.Tensor) else lr
-    return (f'[{mode}|epoch:{epoch:2d}]'
-            f'[out:{out_step_cur:3d}/{out_step_max}|'
-            f'in:{in_step_cur:4d}/{in_step_max}][{lr:4.3f}]')
+    self._log += (f'[{mode}|epoch:{epoch:2d}]'
+                  f'[out:{out_step_cur:3d}/{out_step_max}|'
+                  f'in:{in_step_cur:4d}/{in_step_max}][{lr:5.4f}]')
 
-  @staticmethod
-  def way_shot_query(dataset):
-    assert isinstance(episode, Episode)
-    return (f'W/S/Q:{episode.n_classes:2d}/{episode.s.n_samples:2d}/'
-            f'{episode.q.n_samples:2d}|')
+  def split_info(self, meta_support, meta_query, meta_episode_iterator):
+    assert isinstance(meta_support, Metadata)
+    assert isinstance(meta_query, Metadata)
+    assert isinstance(meta_episode_iterator, MetaEpisodeIterator)
+    # entire dataset
+    s = meta_support
+    q = meta_query
+    # sampled inner dataset
+    epi_s = meta_episode_iterator.support
+    epi_q = meta_episode_iterator.query
+    n_samples = meta_episode_iterator.samples_per_class
+    self._log += (
+        f'S({len(s)}):{len(epi_s)}w-{n_samples}s|'
+        f'Q({len(q)}):{len(epi_q)}w-{n_samples}s|'
+    )
 
-  @staticmethod
-  def colorized_mask(mask, min=0.0, max=1.0, multi=100, fmt='3d', vis_num=20,
-                     colors=[160, 166, 172, 178, 184, 190]):
+  def colorized_mask(self, mask, min=0.0, max=1.0, multi=100, fmt='3d',
+                     vis_num=20, colors=[160, 166, 172, 178, 184, 190],
+                     cond=True):
     out_str = []
     reset = "\033[0m"
     masks = mask.squeeze().tolist()
@@ -61,13 +80,12 @@ class Printer():
       out_str.append(f"\033[38;5;{str(color)}m" +
                      "%%%s" % fmt % int(m) + reset)
       # import pdb; pdb.set_trace()
-    return f'[{"|".join(out_str)}]'
+    self._log += f'[{"|".join(out_str)}]'
 
-  @staticmethod
-  def outputs(outputs, print_conf):
+  def outputs(self, outputs, print_conf):
     assert isinstance(outputs, (list, tuple))
     ###########################################################
     from nn.reinforcement import Policy
     assert(all([isinstance(out, (ModelOutput, Policy)) for out in outputs]))
     ###################################################################
-    return "".join([out.to_text(print_conf) for out in outputs])
+    self._log += "".join([out.to_text(print_conf) for out in outputs])

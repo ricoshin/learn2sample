@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from loader.episode import Dataset, Episode
 from nn.output import ModelOutput
-from nn.sampler2 import MaskMode
+from nn.sampler2 import MaskDist
 from torch.nn import functional as F
 from utils.torchviz import make_dot
 from utils.utils import MyDataParallel
@@ -172,7 +172,6 @@ class Model(nn.Module):
 
     *In case of the metric-based learning, softmax units are automatically
     reduced, whereas additional treatments are needed for the FC layer.
-    *If we use hard_mask
 
     Returns:
       nn.output.ModelOutput
@@ -181,29 +180,31 @@ class Model(nn.Module):
     assert (mask is None) == (mask_mode is None)
     if mask_mode is not None:
       assert isinstance(mask_mode, MaskMode)
-    #####################################################################
-    if (mask_mode == MaskMode.DISCRETE) or \
-    (mask_mode == MaskMode.RL and mask is not None) :
-    #####################################################################
-      # data level masking:
-      #  in case of prototypical network, there cannot be prototypes
-      #  when certain classes are masked out, then it has to be like
-      #  there were not those classes from the beginning.
-      mask = (mask > 0.01).float()
-      data = data.masked_select(mask)
-      if self.mode == 'metric':
-        # metric-based method does NOT need mask any longer
-        mask = None
+      #####################################################################
+      if (mask_mode.dist is MaskDist.DISCRETE) or \
+      (mask_mode.dist is MaskDist.RL and mask is not None) :
+      #####################################################################
+        # data level masking:
+        #  in case of prototypical network, there cannot be prototypes
+        #  when certain classes are masked out, then it has to be like
+        #  there were not those classes from the beginning.
+        mask = (mask > 0.01).float()
+        data = data.masked_select(mask)
+        if self.mode == 'metric':
+          # metric-based method does NOT need mask any longer
+          mask = None
 
     # images and labels
     if isinstance(data, Dataset):
       # when using Meta-dataset
       x = data.imgs  # [n_cls*n_ins, 3, 84, 84]
       y = data.labels  # [n_cls*n_ins]
+      classwise_fn = data.get_view_classwise_fn()
     elif isinstance(data, Episode):
       # when using customized bi-level dataset
       x = data.concatenated.imgs
       y = data.concatenated.labels
+      classwise_fn = data.q.get_view_classwise_fn()
     else:
       raise Exception()
 
@@ -212,7 +213,7 @@ class Model(nn.Module):
     x_embed_s = x_embed[:(x_embed.size(0) // 2)]
     x_embed_q = x_embed[(x_embed.size(0) // 2):]
 
-    classwise_fn = data.q.get_view_classwise_fn()
+    import pdb; pdb.set_trace()
     pairwise_dist = self._pairwise_dist(x_embed_s, x_embed_q, classwise_fn)
 
     if self.mode == 'fc':

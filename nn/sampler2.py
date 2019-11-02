@@ -1,7 +1,7 @@
 import math
 import os
 import sys
-from enum import Enum, unique
+from enum import Enum, auto
 
 import gin
 import numpy as np
@@ -11,16 +11,38 @@ from torch.distributions.relaxed_bernoulli import RelaxedBernoulli
 from torch.nn import functional as F
 from utils import utils
 from utils.utils import MyDataParallel, ParallelizableModule
+from collections import namedtuple
 
 C = utils.getCudaManager('default')
 
 
-@unique
-class MaskMode(Enum):
-  SOFT = 0      # simple sigmoid, attention-like mask
-  DISCRETE = 1  # hard, non-differentiable mask
-  CONCRETE = 2  # different mask from CONCRETE distribution
-  RL = 3  # simple softmax delivered to policy network in RL
+class MaskUnit(Enum):
+  """Masking unit."""
+  SAMPLE = auto()    # samplewise mask
+  CLASS = auto()     # classwise mask
+
+
+class MaskDist(Enum):
+  """Mask distribution."""
+  SOFT = auto()      # simple sigmoid, attention-like mask
+  DISCRETE = auto()  # hard, non-differentiable mask
+  CONCRETE = auto()  # different mask from CONCRETE distribution
+  RL = auto()        # simple softmax delivered to policy network in RL
+
+
+class MaskMode(object):
+  def __init__(self, unit, dist):
+    assert isinstance(unit, MaskUnit) and isinstance(dist, MaskDist)
+    self.unit = unit
+    self.dist = dist
+
+  def __repr__(self):
+    return f"MaskMode({self.unit}, {self.dist})"
+
+
+# def get_sampler(sampler_type):
+#   assert sampler_type in ['pre-sampler', 'post-sampler']
+#   return Sampler
 
 
 @gin.configurable
@@ -55,13 +77,21 @@ class Sampler(ParallelizableModule):
     self.t_encoder = lambda t: [
         np.tanh(3 * t / 10**s - 1) for s in self.t_scales]
 
-  def forward(
-    self, pairwise_dist, classwise_loss, classwise_acc, n_classes, mask_mode):
+  def forward(self, mask_mode, feature_extraction_fn=None):
     assert isinstance(mask_mode, MaskMode)
-    # attention-based pairwise representation
+    
+    if feature_extraction_fn is not None:
+      assert callable(feature_extraction_fn)
+      output = feature_extraction_fn()
+      pairwise_dist = output.pairwise_dist.detach()
+      classwise_loss = output.classwise_loss.detach()
+      classwise_acc = output.classwise_acc.detach()
+      n_classes = output.n_classes
+
+    # attention-based pairwse distance information
     atten = self.softmax(self.pairwse_attention(pairwise_dist))
     # [n_classes, hidden_dim]
-    p = self.tanh((pairwise_dist * atten).sum(dim=1)).detach()
+    p = self.tanh((pairwise_dist * atten).sum(dim=1))
 
     # loss
     loss_class = classwise_loss / np.log(n_classes)
@@ -89,7 +119,10 @@ class Sampler(ParallelizableModule):
     time = C(torch.tensor(self.t_encoder(self.t)))
 
     # shared feature encoding
-    s = torch.cat([self.loss_mean, self.acc_mean, time], dim=0).detach()
+    #   log_loss_mean: take log to suppress too large losses
+    #                  then add 1 to avoid negative infinity
+    log_loss_mean = (self.loss_mean + 1).log()
+    s = torch.cat([log_loss_mean, self.acc_mean, time], dim=0).detach()
     s = self.tanh(self.shared_encoder(s)).repeat(n_classes, 1)
     # s: [n_classes, hidden_dim]
 
@@ -102,7 +135,7 @@ class Sampler(ParallelizableModule):
     h = torch.cat([p, s + r], dim=1)
     mask_logits = self.mask_generator(h)
 
-    # learning rate generation ()
+    # learning rate generation
     h_mean = self.tanh(h.mean(dim=0))
     lr_logits = self.lr_generator(h_mean)
     lr = F.softplus(lr_logits) * 0.1
@@ -111,33 +144,34 @@ class Sampler(ParallelizableModule):
     # on_off_style = ['softmax', 'sigmoid'][1]  # TODO: global argument
 
     # soft mask
-    if mask_mode == MaskMode.SOFT:
+    if mask_mode.dist is MaskDist.SOFT:
       # if on_off_style == 'sigmoid':
       mask = self.sigmoid(mask_logits[:, 0])  # TODO: logit[:, 1] is redundant
-    elif mask_mode == MaskMode.RL:
+    elif mask_mode.dist is MaskDist.RL:
       # elif on_off_style == 'softmax':
       mask = self.softmax(mask_logits)  # This guy is for RL case
     # discrete mask
     #####################################################################
-    elif mask_mode == MaskMode.DISCRETE:
-      mask = lr_logits[:, 0].max(dim=1)[1]  # TODO: logit[:, 1] is redundant
-    # concrete mask
-    elif mask_mode == MaskMode.CONCRETE:
-      # infer Bernoulli parameter
-      mean = self.sigmoid(mask_logits[:, 0])
-      sigma = F.softplus(mask_logits[:, 1])
-      eps = torch.randn(mean.size()).to(mean.device)
-      # continously relaxed Bernoulli
-      probs = mean + sigma * eps
-      temp = torch.tensor([0.1]).to(mean.device)
-      mask = RelaxedBernoulli(temp, probs=probs)
-      mask = mask.rsample()
+    elif mask_mode.dist is MaskDist.DISCRETE:
+        mask = lr_logits[:, 0].max(dim=1)[1]  # TODO: logit[:, 1] is redundant
+      # concrete mask
+    elif mask_mode.dist is MaskDist.CONCRETE:
+        # infer Bernoulli parameter
+        mean = self.sigmoid(mask_logits[:, 0])
+        sigma = F.softplus(mask_logits[:, 1]) * 0.1
+        eps = torch.randn(mean.size()).to(mean.device)
+        # continously relaxed Bernoulli
+        probs = mean + (sigma * eps)
+        temp = torch.tensor([0.1]).to(mean.device)
+        mask = RelaxedBernoulli(temp, probs=probs)
+        # mask = mask.rsample()
+        if torch.isnan(mask.rsample()).sum() > 0:
+          import pdb; pdb.set_trace()
 
     return mask, lr
 
   def initialize(self):
     self.t = 0  # timestamp
-    self.m = self.new_momentum()
     self.loss_mean = self.acc_mean = None  # running mean
 
   def save(self, save_path=None):

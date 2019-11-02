@@ -105,6 +105,7 @@ class Metadata(object):
     return class_idx, sample_idx
 
   def idx_bi_to_uni(self, class_idx, sample_idx):
+    """class_idx: relative idx"""
     cumsum = self.cumulative_num_samples
     if class_idx > 0:
       sample_idx += cumsum[class_idx - 1]
@@ -256,12 +257,12 @@ class Metadata(object):
       idx_to_samples[abs_idx] = self.idx_to_samples[abs_idx]
     return self.new(class_to_idx, class_to_idx, idx_to_samples)
 
-  def sample_class(self, num):
+  def sample_classes(self, num):
     sampled_idx = np.random.choice(
         len(self), num, replace=False).tolist()
     return self._select_class(sampled_idx)
 
-  def split_class(self, ratio, shuffle=True):
+  def split_classes(self, ratio, shuffle=True):
     assert 0. < ratio < 1.
     meta_a = copy.deepcopy(self)
     meta_b = copy.deepcopy(self)
@@ -272,7 +273,7 @@ class Metadata(object):
     return (meta_a._select_class(class_idx[:thres]),
             meta_b._select_class(class_idx[thres:]))
 
-  def sample_instance(self, num):
+  def sample_instances(self, num):
     meta = copy.deepcopy(self)
     idx_to_samples = dict()
     for class_idx, samples in self.idx_to_samples.items():
@@ -281,7 +282,7 @@ class Metadata(object):
     meta.idx_to_samples = idx_to_samples
     return meta
 
-  def split_instance(self, ratio, shuffle=True):
+  def split_instances(self, ratio, shuffle=True):
     assert 0. < ratio < 1.
     meta_a = copy.deepcopy(self)
     meta_b = copy.deepcopy(self)

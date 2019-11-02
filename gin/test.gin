@@ -14,7 +14,7 @@ test/loop.mode = "test"
 # meta_train: args
 meta_train.meta_epoch = 100
 meta_train.outer_optim = "adam"
-meta_train.outer_lr = 0.0001
+meta_train.outer_lr = 0.001
 meta_train.tolerance = 2
 
 # loop: outer/inner steps
@@ -25,13 +25,13 @@ valid/loop.outer_steps = 50
 test/loop.outer_steps = 600
 
 # loop: only for meta-training
-train/loop.unroll_steps = 8
+train/loop.unroll_steps = 10
 train/loop.meta_batchsize = 0
 
 # sampler
 Sampler.mask_mode = "class"  # sample / class
-Sampler.embed_dim = 128
-Sampler.rnn_dim = 128
+Sampler.embed_dim = 256
+Sampler.rnn_dim = 256
 # MaskGenerator.input_more = True
 # MaskGenerator.output_more = True
 # MaskGenerator.sample_mode = False

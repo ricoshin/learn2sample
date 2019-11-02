@@ -38,8 +38,8 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   # [ImageNet 1K] meta-train:100 / meta-valid:450 / meta-test:450 (classes)
   meta_data = ImagenetMetadata.load_or_make(
       data_dir=IMAGENET_DIR, devkit_dir=DEVKIT_DIR, remake=False)
-  meta_data_train, remainder = meta_data.split_class(0.5)
-  meta_data_valid, meta_data_test = remainder.split_class(0.5)
+  meta_data_train, remainder = meta_data.split_classes(0.5)
+  meta_data_valid, meta_data_test = remainder.split_classes(0.5)
 
   sampler = C(Sampler())
   # sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)

@@ -38,8 +38,7 @@ class Dataset(object):
     rest_dims = [self.imgs.size(i) for i in range(1, len(self.imgs.shape))]
     imgs = self.imgs.view(
       self.n_classes, -1, *rest_dims)[key].view(-1, *rest_dims)
-    labels = self.labels.view(
-      self.n_classes, -1)[[i for i in range(len(key))]].view(-1)
+    labels = self.labels.view(self.n_classes, -1)[key].view(-1)
     ids = self.ids.view(self.n_classes, -1)[key].view(-1)
     return Dataset(imgs, labels, ids, self.name)
 
@@ -51,18 +50,6 @@ class Dataset(object):
     else:
       return self.__getitem__(idx)
 
-  # @property
-  # def n_classes(self):
-  #   if self._n_classes is None:
-  #     self._n_classes =
-  #   return self._n_classes
-
-  # @property
-  # def n_samples(self):
-  #   if self._n_samples is None:
-  #     self._n_samples = int(len(self) / self.n_classes)
-  #   return self._n_samples
-
   def offset_indices(self, offset_labels, offset_ids):
     labels = self.labels + offset_labels
     ids = self.ids + offset_ids
@@ -70,9 +57,9 @@ class Dataset(object):
 
   def get_view_classwise_fn(self):
     def view_classwise_fn(x):
-      assert x.size(0) == self.n_classes * self.n_samples
+      # assert x.size(0) == self.n_classes * self.n_samples
       rest_dims = [x.size(i) for i in range(1, len(x.shape))]
-      return x.view(self.n_classes, self.n_samples, *rest_dims)
+      return x.view(self.n_classes, -1, *rest_dims)
     return view_classwise_fn
 
   def get_view_elementwise_fn(self):
@@ -83,9 +70,15 @@ class Dataset(object):
       return x.view(self.n_classes * self.n_samples, *rest_dims)
     return view_elementwise_fn
 
-  def cuda(self, device):
+  def cuda(self, device=None):
     imgs = self.imgs.cuda(device)
     labels = self.labels.cuda(device)
+    ids = self.ids  # .cuda()  # useless for now
+    return Dataset(imgs, labels, ids, self.name)
+
+  def cpu(self):
+    imgs = self.imgs.cpu()
+    labels = self.labels.cpu()
     ids = self.ids  # .cuda()  # useless for now
     return Dataset(imgs, labels, ids, self.name)
 
@@ -238,9 +231,14 @@ class Episode(object):
     return Episode(*[set.offset_indices(offset_labels, offset_ids)
                      for set in self], self.n_total_classes)
 
-  def cuda(self, device):
+  def cuda(self, device=None):
     s = self.s.cuda(device)
     q = self.q.cuda(device)
+    return Episode(s, q, self.n_total_classes, self.name)
+
+  def cpu(self):
+    s = self.s.cpu()
+    q = self.q.cpu()
     return Episode(s, q, self.n_total_classes, self.name)
 
   def numpy(self):
@@ -312,8 +310,8 @@ class Episode(object):
 
   @classmethod
   def get_sampled_episode_from_loaders(cls, meta_s, meta_q, split_ratio):
-    Episode(meta_s.split_instance(split_ratio).get_loader())
-    meta_q_loader = meta_q.split_instance(split_ratio).get_loader()
+    Episode(meta_s.split_instances(split_ratio).get_loader())
+    meta_q_loader = meta_q.split_instances(split_ratio).get_loader()
 
 
   def show(self, size_multiplier=1, max_imgs_per_col=10, max_imgs_per_row=10):
