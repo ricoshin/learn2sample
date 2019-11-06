@@ -1,6 +1,5 @@
 import torch
 from loader.episode import Episode
-from loader.loader import MetaEpisodeIterator
 from loader.metadata import Metadata
 from nn.output import ModelOutput
 
@@ -45,21 +44,21 @@ class Logger():
                   f'[out:{out_step_cur:3d}/{out_step_max}|'
                   f'in:{in_step_cur:4d}/{in_step_max}][{lr:5.4f}]')
 
-  def split_info(self, meta_support, meta_query, meta_episode_iterator):
-    assert isinstance(meta_support, Metadata)
-    assert isinstance(meta_query, Metadata)
-    assert isinstance(meta_episode_iterator, MetaEpisodeIterator)
-    # entire dataset
-    s = meta_support
-    q = meta_query
-    # sampled inner dataset
-    epi_s = meta_episode_iterator.support
-    epi_q = meta_episode_iterator.query
-    n_samples = meta_episode_iterator.samples_per_class
-    self._log += (
-        f'S({len(s)}):{len(epi_s)}w-{n_samples}s|'
-        f'Q({len(q)}):{len(epi_q)}w-{n_samples}s|'
-    )
+  # def split_info(self, meta_support, meta_query, meta_episode_iterator):
+  #   assert isinstance(meta_support, Metadata)
+  #   assert isinstance(meta_query, Metadata)
+  #   # assert isinstance(meta_episode_iterator, MetaEpisodeIterator)
+  #   # entire dataset
+  #   s = meta_support
+  #   q = meta_query
+  #   # sampled inner dataset
+  #   epi_s = meta_episode_iterator.support
+  #   epi_q = meta_episode_iterator.query
+  #   n_samples = meta_episode_iterator.samples_per_class
+  #   self._log += (
+  #       f'S({len(s)}):{len(epi_s)}w-{n_samples}s|'
+  #       f'Q({len(q)}):{len(epi_q)}w-{n_samples}s|'
+  #   )
 
   def colorized_mask(self, mask, min=0.0, max=1.0, multi=100, fmt='3d',
                      vis_num=20, colors=[160, 166, 172, 178, 184, 190],

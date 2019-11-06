@@ -9,6 +9,7 @@ from os import path
 import _pickle as pickle
 import numpy as np
 import scipy.io as sio
+from loader import loader
 from torch.utils import data
 from tqdm import tqdm
 
@@ -16,8 +17,6 @@ EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp',
               '.pgm', '.tif', '.tiff', '.webp', '.pt')
 
 # scanning function
-
-
 def scandir(dir):
   if sys.version_info >= (3, 5):
     return [d.name for d in os.scandir(dir) if d.is_dir()]
@@ -25,9 +24,12 @@ def scandir(dir):
     return [d for d in os.listdir(dir) if path.isdir(path.join(dir, d))]
 
 
+_METADATA_DEFAULT_NAME = 'Metadata'
+
 class Metadata(object):
-  def __init__(self, **kwargs):
-    self.dnames = []
+  def __init__(self, name=_METADATA_DEFAULT_NAME, **kwargs):
+    self.name = name
+    self.dict_names = []
     self._cumulative_num_samples = None
     self._add_metadata(**kwargs)
 
@@ -38,7 +40,7 @@ class Metadata(object):
       return 0
 
   def __repr__(self):
-    return 'Metadata' + self.dnames.__repr__()
+    return 'Metadata' + self.dict_names.__repr__() + f'(name={self.name})'
 
   def __getitem__(self, rel_idx):
     return self.idx_to_samples[self.abs_idx[rel_idx]]
@@ -56,17 +58,17 @@ class Metadata(object):
       except:
         import pdb
         pdb.set_trace()
-      self.dnames.append(name)
+      self.dict_names.append(name)
 
   def _del_metadata(self, names):
     for name in names:
-      if name in self.dnames:
+      if name in self.dict_names:
         delattr(self, name)
-        self.dnames.remove(name)
+        self.dict_names.remove(name)
 
   def _change_dname(self, from_to):
     assert isinstance(from_to, dict)
-    self._add_metadata(**{from_to[n]: getattr(self, n) for n in self.dnames
+    self._add_metadata(**{from_to[n]: getattr(self, n) for n in self.dict_names
                           if n in from_to.keys()})
     self._del_metadata([v for v in from_to.keys()])
 
@@ -112,7 +114,7 @@ class Metadata(object):
     return sample_idx
 
   @classmethod
-  def merge(cls, others):
+  def merge(cls, others, name=_METADATA_DEFAULT_NAME):
     assert len(others) > 1
     # assert all([others[0] == other for other in others])
     classes = [set(other.classes) for other in others]
@@ -127,7 +129,7 @@ class Metadata(object):
       for other in others:
         samples.extend(other.idx_to_samples[idx])
       idx_to_samples[idx] = list(set(samples))
-    return cls(classes, class_to_idx, idx_to_class, idx_to_samples)
+    return cls(classes, class_to_idx, idx_to_class, idx_to_samples, name=name)
 
   @classmethod
   def get_filepath(cls, root):
@@ -148,8 +150,12 @@ class Metadata(object):
   def save(self, root):
     filepath = self.get_filepath(root)
     with open(filepath, 'wb') as f:
-      pickle.dump({n: getattr(self, n) for n in self.dnames}, f)
+      pickle.dump({n: getattr(self, n) for n in self.dict_names}, f)
     print(f'Saved processed dataset dictionaries: {filepath}')
+
+  @classmethod
+  def new(cls, *args, name=_METADATA_DEFAULT_NAME):
+    return cls(**cls._template_base(*args), name=name)
 
   @classmethod
   def _template_base(cls, classes, class_to_idx, idx_to_samples):
@@ -244,7 +250,7 @@ class Metadata(object):
       idx_to_samples[idx] = samples
     return idx_to_samples
 
-  def _select_class(self, rel_idx):
+  def _select_class(self, rel_idx, name=_METADATA_DEFAULT_NAME):
     assert isinstance(rel_idx, (list, tuple))
     classes = []
     class_to_idx = dict()
@@ -255,51 +261,104 @@ class Metadata(object):
       classes.append(class_)
       class_to_idx[abs_idx] = self.class_to_idx[class_]
       idx_to_samples[abs_idx] = self.idx_to_samples[abs_idx]
-    return self.new(class_to_idx, class_to_idx, idx_to_samples)
+    return self.new(
+      class_to_idx, class_to_idx, idx_to_samples, name=_METADATA_DEFAULT_NAME)
 
-  def sample_classes(self, num):
+  def sample_classes(self, num, name=_METADATA_DEFAULT_NAME):
     sampled_idx = np.random.choice(
         len(self), num, replace=False).tolist()
-    return self._select_class(sampled_idx)
+    return self._select_class(sampled_idx, name=name)
 
-  def split_classes(self, ratio, shuffle=True):
-    assert 0. < ratio < 1.
-    meta_a = copy.deepcopy(self)
-    meta_b = copy.deepcopy(self)
-    class_idx = list(range(len(self)))
-    if shuffle:
-      random.shuffle(class_idx)
-    thres = int(len(self) * ratio)
-    return (meta_a._select_class(class_idx[:thres]),
-            meta_b._select_class(class_idx[thres:]))
-
-  def sample_instances(self, num):
+  def sample_instances(self, num, name=_METADATA_DEFAULT_NAME):
     meta = copy.deepcopy(self)
     idx_to_samples = dict()
     for class_idx, samples in self.idx_to_samples.items():
       sampled_idx = np.random.choice(len(samples), num, replace=False).tolist()
       idx_to_samples[class_idx] = [samples[i] for i in sampled_idx]
     meta.idx_to_samples = idx_to_samples
+    meta.name = name
     return meta
 
+  def _get_split_name_and_ratio(self, ratio):
+    if isinstance(ratio[0], (list,tuple)):
+      for i in range(len(ratio)):
+        assert len(ratio[i]) == 2
+        assert isinstance(ratio[i][0], str)
+        assert isinstance(ratio[i][1], (int, float))
+      names, ratio = list(zip(*ratio))
+    else:
+      for i in range(len(ratio)):
+        assert isinstance(ratio[i], (int, float))
+      names = None
+    ratio = [r / sum(ratio) for r in ratio]
+    assert all([0. < r < 1. for r in ratio])
+    return names, ratio
+
+  def split_classes(self, ratio, shuffle=True):
+    """Usage:
+      meta_data = Metadata(...)
+      # 1 : 4 support/query split
+      support, query = meta_data.split_classes(
+        (('Support', 0.1), ('Query', 0.4))
+      )
+    """
+    assert isinstance(ratio, (list, tuple))
+    assert isinstance(shuffle, bool)
+    names, ratio = self._get_split_name_and_ratio(ratio)
+    class_idx = list(range(len(self)))
+    if shuffle:
+      random.shuffle(class_idx)
+    prev_thres = 0
+    meta_data_list = []
+    for i, r in enumerate(ratio):
+      thres = int(len(self) * r)
+      meta_data = copy.deepcopy(self)
+      meta_data = meta_data._select_class(class_idx[prev_thres:thres])
+      if names:
+        meta_data.name = names[i]
+      meta_data_list.append(meta_data)
+      prev_thres = thres
+    return meta_data_list
+
   def split_instances(self, ratio, shuffle=True):
-    assert 0. < ratio < 1.
-    meta_a = copy.deepcopy(self)
-    meta_b = copy.deepcopy(self)
-    idx_to_samples_a = dict()
-    idx_to_samples_b = dict()
+    """Usage:
+      meta_data = Metadata(...)
+      # 1 : 4 support/query split
+      support, query = meta_data.split_instances(
+        (('Support', 1), ('Query', 4))
+      )
+    """
+    assert isinstance(ratio, (list, tuple))
+    assert isinstance(shuffle, bool)
+    names, ratio = self._get_split_name_and_ratio(ratio)
+    idx_to_samples_all = [{} for i in range(len(ratio))]
     for class_idx, samples in self.idx_to_samples.items():
       len_ = len(samples)
-      inst_idx = list(range(len_))
+      sample_idx = list(range(len_))
       if shuffle:
-        random.shuffle(inst_idx)
-      thres = int(len_ * ratio)
-      # import pdb; pdb.set_trace()
-      idx_to_samples_a[class_idx] = [samples[i] for i in inst_idx[:thres]]
-      idx_to_samples_b[class_idx] = [samples[i] for i in inst_idx[thres:]]
-    meta_a.idx_to_samples = idx_to_samples_a
-    meta_b.idx_to_samples = idx_to_samples_b
-    return meta_a, meta_b
+        random.shuffle(sample_idx)
+      prev_thres = 0
+      for i, r in enumerate(ratio):
+        thres = int(len_ * r)
+        sampled_idx = sample_idx[prev_thres:thres]
+        idx_to_samples_all[i][class_idx] = [samples[i] for i in sampled_idx]
+        prev_thres = thres
+    meta_data_list = []
+    for i, idx_to_samples in enumerate(idx_to_samples_all):
+      meta_data = copy.deepcopy(self)
+      meta_data.idx_to_samples = idx_to_samples
+      if names:
+        meta_data.name = names[i]
+      meta_data_list.append(meta_data)
+    return meta_data_list
+
+  def dataset_loader(self, loader_config):
+    assert isinstance(loader_config, loader.LoaderConfig)
+    return loader_config.get_dataset_loader(self, self.name)
+
+  def episode_loader(self, loader_config):
+    assert isinstance(loader_config, loader.LoaderConfig)
+    return loader_config.get_episode_loader(self, self.name)
 
 
 class ImagenetMetadata(Metadata):
@@ -349,8 +408,8 @@ class ImagenetMetadata(Metadata):
         *cls.scan_imagenet_devkit(data_dir, devkit_dir))
 
   @classmethod
-  def new(cls, *args):
-    return cls(**cls._template_imagenet(*args))
+  def new(cls, *args, name=_METADATA_DEFAULT_NAME):
+    return cls(**cls._template_imagenet(*args), name=name)
 
   @classmethod
   def _template_wordnet(cls, classes, class_to_wnid):
@@ -386,7 +445,7 @@ class ImagenetMetadata(Metadata):
     val_wnids = [idx_to_wnid[idx] for idx in val_idcs]
     return classes, class_to_wnid
 
-  def _select_class(self, rel_idx):
+  def _select_class(self, rel_idx, name=_METADATA_DEFAULT_NAME):
     assert isinstance(rel_idx, (list, tuple))
     classes = []
     wnids = []
@@ -402,4 +461,5 @@ class ImagenetMetadata(Metadata):
       wnid_to_idx[wnid] = self.wnid_to_idx[wnid]
       class_to_wnid[class_] = self.class_to_wnid[class_]
       idx_to_samples[abs_idx] = self.idx_to_samples[abs_idx]
-    return self.new(wnids, wnid_to_idx, idx_to_samples, classes, class_to_wnid)
+    return self.new(
+      wnids, wnid_to_idx, idx_to_samples, classes, class_to_wnid, name=name)

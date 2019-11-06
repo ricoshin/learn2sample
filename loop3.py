@@ -6,9 +6,11 @@ import gin
 import numpy as np
 import torch
 import torch.multiprocessing
-from loader.loader import LoaderConfig
+from loader.loader import (BalancedBatchSampler, MetaEpisodeIterator,
+                           RandomBatchSampler)
 from loader.meta_dataset import (MetaDataset, MetaMultiDataset,
                                  PseudoMetaDataset)
+from loader.metadata import Metadata
 from nn.model import Model
 from nn.output import ModelOutput
 #####################################################################
@@ -59,16 +61,16 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   fc_pulling = False  # does not support for now
   class_balanced = False
   if class_balanced:
-    loader_cfg = LoaderConfig(class_size=10, sample_size=3, num_workers=4)
+    classes_per_episode = 10
+    samples_per_class = 3
   else:
-    loader_cfg = LoaderConfig(batch_size=128, num_workers=4)
-
+  batch_size = 128
   sample_split_ratio = 0.5
   # sample_split_ratio = None
   anneal_outer_steps = 50
   concrete_resample = True
   detach_param = False
-  split_method = {1: 'inclusive', 2: 'exclusive'}[2]
+  split_method = {1: 'inclusive', 2: 'exclusive'}[1]
   sampler_type = {1: 'pre_sampler', 2: 'post_sampler'}[2]
   #####################################################################
   mask_unit = {
@@ -88,21 +90,17 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   inner_step_scheduler = InnerStepScheduler(
       outer_steps, inner_steps, anneal_outer_steps)
 
+  # 100 classes in total
   if split_method == 'exclusive':
-    meta_support, meta_query = data.split_classes(
-      (('Support', 1), ('Query', 5)))  # 1(100) : 4(400)
+    # meta_support, remainder = data.split_classes(0.1)  # 10 classes
+    # meta_query = remainder.sample_classes(50)  # 50 classes
+    meta_support, meta_query = data.split_classes(1 / 5)  # 1(100) : 4(400)
+    # meta_support, meta_query = data.split_classes(0.3)  # 30 : 70 classes
   elif split_method == 'inclusive':
-    meta_support, meta_query = data.split_instances(
-      (('Support', 5), ('Query', 5)))  # 5:5 instances
-
-  meta_s_loader0 = meta_support.dataset_loader(loader_cfg)
-  meta_s_loader1 = meta_support.episode_loader(loader_cfg)
-  l0 = meta_s_loader0()
-  l1 = meta_s_loader1()
-
-  # sss.get_classes[:3]
-  import pdb
-  pdb.set_trace()
+    # subdata = data.sample_classes(10)  # 50 classes
+    meta_support, meta_query = data.split_instances(0.5)  # 5:5 instances
+  else:
+    raise Exception()
 
   if train:
     if meta_batchsize > 0:
@@ -157,13 +155,30 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       params_b0 = C(params.copy('b0'), 4)
       params_b1 = C(params.copy('b1'), 4)
 
+    if class_balanced:
+      batch_sampler = BalancedBatchSampler.get(class_size, sample_size)
+    else:
+      batch_sampler = RandomBatchSampler.get(batch_size)
+    # episode iterator
+    episode_iterator = MetaEpisodeIterator(
+        meta_support=meta_support,
+        meta_query=meta_query,
+        batch_sampler=batch_sampler,
+        match_inner_classes=match_inner_classes,
+        inner_steps=inner_step_scheduler(i, verbose=True),
+        sample_split_ratio=sample_split_ratio,
+        num_workers=4,
+        pin_memory=True,
+    )
+
     do_sample = True
-    for k in range(1, inner_step_scheduler(i, verbose=True)):
+    for k, (meta_s, meta_q) in episode_iterator(do_sample):
       outs = []
+      meta_s = meta_s.cuda()
+
       #####################################################################
       if do_sample:
         do_sample = False
-        meta_s_loader = meta_s.get_dataset_loader(loader_cfg, 'Support')
         # task encoding (very first step and right after a meta-update)
         with torch.set_grad_enabled(train):
           def feature_fn():
@@ -282,7 +297,7 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
       if k % log_steps == 0:
         logger.step_info(
             epoch, mode, i, outer_steps, k,  inner_step_scheduler(i), lr)
-        # logger.split_info(meta_support, meta_query, episode_iterator)
+        logger.split_info(meta_support, meta_query, episode_iterator)
         logger.colorized_mask(
             mask, fmt="2d", vis_num=20, cond=not sig_1.is_active() and log_mask)
         logger.outputs(outs, print_conf=sig_1.is_active())

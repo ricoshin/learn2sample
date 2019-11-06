@@ -38,9 +38,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
   # [ImageNet 1K] meta-train:100 / meta-valid:450 / meta-test:450 (classes)
   meta_data = ImagenetMetadata.load_or_make(
       data_dir=IMAGENET_DIR, devkit_dir=DEVKIT_DIR, remake=False)
-  meta_data_train, remainder = meta_data.split_classes(0.5)
-  meta_data_valid, meta_data_test = remainder.split_classes(0.5)
-
+  meta_train, meta_valid, meta_test = meta_data.split_classes((2, 4, 4))
   sampler = C(Sampler())
   # sampler.cuda_parallel_(dict(encoder=0, mask_gen=1), C.parallel)
   # sampler = MyDataParallel(sampler)
@@ -62,7 +60,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
     #####################################################################
     # meta train
     sampler, result_train = train_loop(
-        data=meta_data_train,
+        data=meta_train,
         sampler=sampler,
         outer_optim=outer_optim,
         save_path=save_path,
@@ -72,7 +70,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
 
     # meta valid
     _, result_valid = valid_loop(
-        data=meta_data_valid,
+        data=meta_valid,
         sampler=sampler,
         save_path=save_path,
         epoch=i,
@@ -116,7 +114,7 @@ def meta_train(train_loop, valid_loop, test_loop, meta_epoch, tolerance,
 
   # meta test
   _, result_test = test_loop(
-      data=meta_data_test,
+      data=meta_test,
       sampler=sampler,
       save_path=save_path)
 

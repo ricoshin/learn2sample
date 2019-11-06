@@ -12,6 +12,29 @@ import tensorflow as tf
 import torch
 
 
+class ClassIndexer(object):
+  def __init__(self, dataset):
+    assert isinstance(dataset, Dataset)
+    self.dataset = dataset
+
+  def __len__(self):
+    return self.dataset.n_classes
+
+  def __repr__(self):
+    return __class__.__name__ + f' for \n{self.dataset}'
+
+  def __getitem__(self, key):
+    """Class indexing"""
+    mask = 0
+    class_idx = list(self.dataset.n_samples.keys())[key]
+    for id in class_idx:
+      mask += self.dataset.labels == id
+    imgs = self.dataset.imgs[mask]
+    labels = self.dataset.labels[mask]
+    ids = self.dataset.ids[mask]
+    return Dataset(imgs, labels, ids, self.dataset.name)
+
+
 class Dataset(object):
   """Dataset class that should contain images, labels, and ids.
   Support set or query set can be a proper candidate of Dataset."""
@@ -22,9 +45,13 @@ class Dataset(object):
     self.imgs = imgs
     self.labels = labels
     self.ids = ids
-    self.n_classes = len(Counter(self.labels.tolist()).keys())
-    self.n_samples = int(len(self) / self.n_classes)
     self.name = name
+    self.n_samples = {i: n for i, n in sorted(Counter(self.labels).items())}
+    self.n_classes = len(self.n_samples.keys())
+    self.get_classes = ClassIndexer(self)  # support classwise operation
+
+  def __repr__(self):
+    return __class__.__name__ + f'(labels={self.labels}, name={self.name})'
 
   def __len__(self):
     assert len(self.labels) == len(self.ids)
@@ -34,13 +61,15 @@ class Dataset(object):
     return iter([self.imgs, self.labels, self.ids])
 
   def __getitem__(self, key):
-    """class indexing"""
-    rest_dims = [self.imgs.size(i) for i in range(1, len(self.imgs.shape))]
-    imgs = self.imgs.view(
-      self.n_classes, -1, *rest_dims)[key].view(-1, *rest_dims)
-    labels = self.labels.view(self.n_classes, -1)[key].view(-1)
-    ids = self.ids.view(self.n_classes, -1)[key].view(-1)
+    """instacne indexing"""
+    imgs = self.imgs[keys]
+    labels = self.labels[keys]
+    ids = self.ids[keys]
     return Dataset(imgs, labels, ids, self.name)
+
+  def new_named(self, name):
+    self.name = name
+    return self
 
   def masked_select(self, mask):
     assert isinstance(mask, torch.Tensor)
@@ -81,9 +110,6 @@ class Dataset(object):
     labels = self.labels.cpu()
     ids = self.ids  # .cuda()  # useless for now
     return Dataset(imgs, labels, ids, self.name)
-
-  def subset(self):
-    pass
 
   def numpy(self):
     """
@@ -209,6 +235,14 @@ class Episode(object):
   def __iter__(self):
     return iter([self.s, self.q])
 
+  def __repr__(self):
+    return (__class__.__name__ + f'\n(s={self.s}, \nq={self.q}, '
+      f'name={self.name}), n_total_classes={self.n_total_classes}')
+
+  def __getitem__(self, key):
+    n_total_classes = self.s.n_total_classes + self.q.n_total_classes
+    return Episode(self.s[key], self.q[key], n_total_classes, self.name)
+
   @property
   def n_classes(self):
     assert self.s.n_classes == self.q.n_classes
@@ -254,7 +288,10 @@ class Episode(object):
 
   @classmethod
   def concat(cls, episodes):
-    """concatenate heterogeneous episodes."""
+    """concatenate heterogeneous(e.g. Omniglot + ImageNet) episodes.
+       class labels and ids in its own dataset need renumbering.
+       (For Meta-dataset)
+    """
     assert isinstance(episodes, Iterable)
     episodes_ = []
     prev_n_cls = prev_n_total_cls = 0
