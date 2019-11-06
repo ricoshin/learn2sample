@@ -44,6 +44,26 @@ class MaskMode(object):
 #   assert sampler_type in ['pre-sampler', 'post-sampler']
 #   return Sampler
 
+# class MaskGenerator(object):
+#   def __init__(self, unit, dist):
+#     assert isinstance(unit, MaskUnit) and isinstance(dist, MaskDist)
+#     self.unit = unit
+#     self.dist = dist
+#
+#   def generate(self, value):
+#     Mask.new()
+#
+# class Mask(object):
+#   def __init__(self, value, mode, labels):
+#     assert isinstance(mode, MaskMode)
+#     self.value = value
+#     self.mode = mode
+#
+#
+#   def __call__(self, target):
+#     pass
+
+
 
 @gin.configurable
 class Sampler(ParallelizableModule):
@@ -79,7 +99,7 @@ class Sampler(ParallelizableModule):
 
   def forward(self, mask_mode, feature_extraction_fn=None):
     assert isinstance(mask_mode, MaskMode)
-    
+
     if feature_extraction_fn is not None:
       assert callable(feature_extraction_fn)
       output = feature_extraction_fn()

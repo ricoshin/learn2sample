@@ -97,8 +97,33 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
 
   meta_s_loader0 = meta_support.dataset_loader(loader_cfg)
   meta_s_loader1 = meta_support.episode_loader(loader_cfg)
+
   l0 = meta_s_loader0()
+  print(l0[1])
+  print(l0[:2])
+  print(l0.classwise[1])
+  print(l0.classwise[:2])
+
   l1 = meta_s_loader1()
+  print(l1[1])
+  print(l1[:2])
+  print(l1.classwise[1])
+  print(l1.classwise[:2])
+
+  fake_mask = torch.tensor([True, False] * 5)
+  l0 = meta_s_loader0()
+  print(l0)
+  sample_l0 = l0.masked_select(fake_mask)
+  print(sample_l0)
+  class_l0 = l0.classwise.masked_select(fake_mask)
+  print(class_l0)
+
+  l1 = meta_s_loader1()
+  print(l1)
+  sample_l1 = l1.masked_select(fake_mask)
+  print(sample_l1)
+  class_l1 = l1.classwise.masked_select(fake_mask)
+  print(class_l1)
 
   # sss.get_classes[:3]
   import pdb

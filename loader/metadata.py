@@ -40,7 +40,9 @@ class Metadata(object):
       return 0
 
   def __repr__(self):
-    return 'Metadata' + self.dict_names.__repr__() + f'(name={self.name})'
+    return ('Metadata' + self.dict_names.__repr__() + f'\n\tname={self.name}, '
+      f'n_classes={len(self)}, n_samples_mean={int(self.n_samples_mean)})')
+
 
   def __getitem__(self, rel_idx):
     return self.idx_to_samples[self.abs_idx[rel_idx]]
@@ -79,6 +81,11 @@ class Metadata(object):
       cumsum += len(samples)
       cumsum_list.append(cumsum)
     return cumsum_list
+
+  @property
+  def n_samples_mean(self):
+    lengths = list(self.idx_to_len.values())
+    return sum(lengths) / len(lengths)
 
   @property
   def idx_to_len(self):

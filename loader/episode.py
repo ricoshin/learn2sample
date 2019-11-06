@@ -12,7 +12,7 @@ import tensorflow as tf
 import torch
 
 
-class ClassIndexer(object):
+class DatasetClassIndexer(object):
   def __init__(self, dataset):
     assert isinstance(dataset, Dataset)
     self.dataset = dataset
@@ -26,13 +26,33 @@ class ClassIndexer(object):
   def __getitem__(self, key):
     """Class indexing"""
     mask = 0
-    class_idx = list(self.dataset.n_samples.keys())[key]
-    for id in class_idx:
+    class_idx = list(self.dataset.n_samples.keys())
+    if isinstance(key, torch.Tensor) and not key.dim() == 0:
+      key = key.tolist()
+
+    if isinstance(key, Iterable):  # list
+      selcted_class_idx = [class_idx[k] for k in key]
+    else:  # int, slice
+      selcted_class_idx = class_idx[key]
+
+    if not isinstance(selcted_class_idx, Iterable):
+      selcted_class_idx = [selcted_class_idx]  # int
+
+    for id in selcted_class_idx:
       mask += self.dataset.labels == id
     imgs = self.dataset.imgs[mask]
     labels = self.dataset.labels[mask]
     ids = self.dataset.ids[mask]
     return Dataset(imgs, labels, ids, self.dataset.name)
+
+  def masked_select(self, mask):
+    assert isinstance(mask, torch.Tensor)
+    idx = mask.squeeze().nonzero().view(-1)
+    # assert len(idx) == len(self)
+    if len(idx) == 0:
+      return None
+    else:
+      return self.__getitem__(idx)
 
 
 class Dataset(object):
@@ -46,9 +66,10 @@ class Dataset(object):
     self.labels = labels
     self.ids = ids
     self.name = name
-    self.n_samples = {i: n for i, n in sorted(Counter(self.labels).items())}
+    class_counter = Counter(self.labels.tolist())
+    self.n_samples = {i: n for i, n in sorted(class_counter.items())}
     self.n_classes = len(self.n_samples.keys())
-    self.get_classes = ClassIndexer(self)  # support classwise operation
+    self.classwise = DatasetClassIndexer(self)  # support classwise operation
 
   def __repr__(self):
     return __class__.__name__ + f'(labels={self.labels}, name={self.name})'
@@ -62,9 +83,10 @@ class Dataset(object):
 
   def __getitem__(self, key):
     """instacne indexing"""
-    imgs = self.imgs[keys]
-    labels = self.labels[keys]
-    ids = self.ids[keys]
+    imgs = self.imgs[key].view(-1)
+    labels = self.labels[key].view(-1)
+    ids = self.ids[key].view(-1)
+    # view() to avoid 0-dim when choosing single instance
     return Dataset(imgs, labels, ids, self.name)
 
   def new_named(self, name):
@@ -74,6 +96,7 @@ class Dataset(object):
   def masked_select(self, mask):
     assert isinstance(mask, torch.Tensor)
     idx = mask.squeeze().nonzero().view(-1)
+    # assert len(idx) == len(self)
     if len(idx) == 0:
       return None
     else:
@@ -221,6 +244,33 @@ class Dataset(object):
     plot.close()
 
 
+class EpisodeClassIndexer(object):
+  def __init__(self, episode):
+    assert isinstance(episode, Episode)
+    self.episode = episode
+
+  def __len__(self):
+    return self.episode.n_classes
+
+  def __repr__(self):
+    return __class__.__name__ + f' for \n{self.episode}'
+
+  def __getitem__(self, key):
+    """Class indexing"""
+    s = self.episode.s.classwise[key]
+    q = self.episode.q.classwise[key]
+    return Episode(s, q, s.n_classes, self.episode.name)
+
+  def masked_select(self, mask):
+    assert isinstance(mask, torch.Tensor)
+    idx = mask.squeeze().nonzero().view(-1)
+    # assert len(idx) == len(self)
+    if len(idx) == 0:
+      return None
+    else:
+      return self.__getitem__(idx)
+
+
 class Episode(object):
   """Collection of support and query set. Single episode for a task adaptation
   can be wrapped with this class."""
@@ -231,17 +281,17 @@ class Episode(object):
     self.q = query
     self.name = name
     self.n_total_classes = n_total_classes
+    self.classwise = EpisodeClassIndexer(self)
 
   def __iter__(self):
     return iter([self.s, self.q])
 
   def __repr__(self):
-    return (__class__.__name__ + f'\n(s={self.s}, \nq={self.q}, '
-      f'name={self.name}), n_total_classes={self.n_total_classes}')
+    return (__class__.__name__ + f'(\n\tsupport={self.s}, \n\tquery={self.q}, '
+      f'\n\tname={self.name}), n_total_classes={self.n_total_classes})')
 
   def __getitem__(self, key):
-    n_total_classes = self.s.n_total_classes + self.q.n_total_classes
-    return Episode(self.s[key], self.q[key], n_total_classes, self.name)
+    return Episode(self.s[key], self.q[key], self.n_total_classes, self.name)
 
   @property
   def n_classes(self):

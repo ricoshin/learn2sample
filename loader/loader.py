@@ -183,5 +183,5 @@ class LoaderConfig(object):
       s = Dataset(*_loader.next(), 'Support')
       q = Dataset(*_loader.next(), 'Query')
       # import pdb; pdb.set_trace()
-      return Episode(s, q, len(s.get_classes), name)
+      return Episode(s, q, len(s.classwise), name)
     return loader
