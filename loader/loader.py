@@ -1,18 +1,18 @@
 from collections import OrderedDict
 
-from numpy.random import randint
 import torch
-from loader.episode import Episode, Dataset
 from loader import metadata
+from loader.episode import Dataset, Episode
+from numpy.random import randint
 from torch.utils import data
 from utils import utils
-
 
 C = utils.getCudaManager('default')
 
 
 class DataFromMetadata(data.Dataset):
   """Convert Metadata to torch.data.Dataset."""
+
   def __init__(self, meta):
     assert isinstance(meta, metadata.Metadata)
     self.meta = meta
@@ -34,18 +34,13 @@ class RandomBatchSampler(data.Sampler):
   """Can be used for metric-based learning while following real data
      distribution unlike ClassBalancedBatchSampler.
   """
+
   def __init__(self, meta, batch_size, n_repeat_classes=1):
     assert isinstance(meta, metadata.Metadata)
     assert isinstance(n_repeat_classes, int) and n_repeat_classes >= 1
     self.meta = meta
     self.batch_size = batch_size
     self.n_repeat_classes = n_repeat_classes
-
-
-  @classmethod
-  def init(cls, batch_size):
-    return lambda meta, n_repeat_classes: cls(
-      meta, batch_size, n_repeat_classes)
 
   def __iter__(self):
     _n_repeated = 0
@@ -63,7 +58,7 @@ class RandomBatchSampler(data.Sampler):
         for class_idx, sample_idx in _to_repeat:
           max_n_samples = self.meta.idx_to_len[self.meta.abs_idx[class_idx]]
           batch.extend([self.meta.idx_bi_to_uni(class_idx, i)
-                       for i in randint(0, max_n_samples, 1)])
+                        for i in randint(0, max_n_samples, 1)])
       _n_repeated += 1
       if _n_repeated == self.n_repeat_classes:
         _n_repeated = 0
@@ -82,11 +77,6 @@ class BalancedBatchSampler(data.Sampler):
     self.sample_size = sample_size
     self.n_repeat_classes = n_repeat_classes
 
-  @classmethod
-  def init(cls, class_size, sample_size):
-    return lambda meta, n_repeat_classes: cls(
-      meta, class_size, sample_size, n_repeat_classes)
-
   def __iter__(self):
     _n_repeated = 0
     _to_repeat = []
@@ -102,8 +92,8 @@ class BalancedBatchSampler(data.Sampler):
         class_idx = self.meta.rel_idx[class_idx]
         max_n_samples = len(samples)
         batch.extend(
-          [self.meta.idx_bi_to_uni(class_idx, sample_idx)
-           for sample_idx in randint(0, max_n_samples, self.sample_size)])
+            [self.meta.idx_bi_to_uni(class_idx, sample_idx)
+             for sample_idx in randint(0, max_n_samples, self.sample_size)])
       _n_repeated += 1
       if _n_repeated == self.n_repeat_classes:
         _n_repeated = 0
@@ -126,12 +116,9 @@ class LoaderConfig(object):
     self.sort_in_batch = sort_in_batch
     self.num_workers = num_workers
     self.pin_memory = pin_memory
-
-    if batch_size:
-      self.batch_sampler_init = RandomBatchSampler.init(batch_size)
-    else:
-      self.batch_sampler_init = BalancedBatchSampler.init(
-        class_size, sample_size)
+    self.batch_size = batch_size
+    self.class_size = class_size
+    self.sample_size = sample_size
 
   def _stack_batch(self, batch):
     out = None
@@ -155,30 +142,46 @@ class LoaderConfig(object):
     ids = self._stack_batch([torch.tensor(b[2]) for b in batch])
     return imgs, labels, ids
 
+  def _get_batch_sampler(self, metadata, n_repeat_classes):
+    if self.batch_size:
+      batch_sampler = RandomBatchSampler(
+          meta=metadata,
+          batch_size=self.batch_size,
+          n_repeat_classes=n_repeat_classes,
+      )
+    else:
+      batch_sampler = BalancedBatchSampler(
+          meta=metadata,
+          class_size=self.class_sizse,
+          sample_size=self.sample_size,
+          n_repeat_classes=n_repeat_classes,
+      )
+    return batch_sampler
+
   def get_dataset_loader(self, metadata, name):
-    batch_sampler = self.batch_sampler_init(
-      meta=metadata, n_repeat_classes=1)
+    batch_sampler = self._get_batch_sampler(metadata, 1)
     _loader = iter(data.DataLoader(
-      dataset=DataFromMetadata(metadata),
-      batch_sampler=batch_sampler,
-      collate_fn=self.collate_fn,
-      num_workers=self.num_workers,
-      pin_memory=self.pin_memory,
+        dataset=DataFromMetadata(metadata),
+        batch_sampler=batch_sampler,
+        collate_fn=self.collate_fn,
+        num_workers=self.num_workers,
+        pin_memory=self.pin_memory,
     ))
+
     def loader():
       return C(Dataset(*_loader.next(), name))
     return loader
 
   def get_episode_loader(self, metadata, name):
-    batch_sampler = self.batch_sampler_init(
-      meta=metadata, n_repeat_classes=2)
+    batch_sampler = self._get_batch_sampler(metadata, 2)
     _loader = iter(data.DataLoader(
-      dataset=DataFromMetadata(metadata),
-      batch_sampler=batch_sampler,
-      collate_fn=self.collate_fn,
-      num_workers=self.num_workers,
-      pin_memory=self.pin_memory,
+        dataset=DataFromMetadata(metadata),
+        batch_sampler=batch_sampler,
+        collate_fn=self.collate_fn,
+        num_workers=self.num_workers,
+        pin_memory=self.pin_memory,
     ))
+
     def loader():
       s = Dataset(*_loader.next(), 'Support')
       q = Dataset(*_loader.next(), 'Query')

@@ -24,7 +24,7 @@ sig_2 = utils.getSignalCatcher('SIGTSTP')
 
 
 @gin.configurable
-def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
+def loop(mode, cfg, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
          log_mask=True, unroll_steps=None, meta_batchsize=0, sampler=None,
          epoch=1, outer_optim=None, save_path=None):
   """Args:

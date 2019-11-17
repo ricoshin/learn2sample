@@ -85,15 +85,9 @@ def loop(mode, data, outer_steps, inner_steps, log_steps, fig_epochs, inner_lr,
   #####################################################################
 
   # scheduler
+  meta_support, meta_query = data.split(split_method)
   inner_step_scheduler = InnerStepScheduler(
       outer_steps, inner_steps, anneal_outer_steps)
-
-  if split_method == 'exclusive':
-    meta_support, meta_query = data.split_classes(
-      (('Support', 1), ('Query', 5)))  # 1(100) : 4(400)
-  elif split_method == 'inclusive':
-    meta_support, meta_query = data.split_instances(
-      (('Support', 5), ('Query', 5)))  # 5:5 instances
 
   meta_s_loader0 = meta_support.dataset_loader(loader_cfg)
   meta_s_loader1 = meta_support.episode_loader(loader_cfg)

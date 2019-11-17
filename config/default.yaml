@@ -1,0 +1,20 @@
+dirs:
+  imagenet: /st1/dataset/learn2sample/imagenet_l2s_84_84
+  imagenet_devkit: /v9/whshin/imagenet/ILSVRC2012_devkit_t12
+  result: result
+
+train:
+  optim: adam  # adam / rmsprop
+  lr: 0.001
+
+sampler:
+  mask_mode: class  # sample / class
+  embed_dim: 256
+  rnn_dim: 256
+  input_more: True
+  output_more: True
+  temp: 1.0
+
+logs:
+  log_steps: 20
+  log_mask: True

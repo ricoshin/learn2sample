@@ -1,9 +1,12 @@
+import argparse
 import importlib
 import logging
 import os
+import pdb
 import random
 import shutil
 import signal
+import sys
 import time
 from datetime import datetime
 
@@ -14,6 +17,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
+import yaml
+from dotmap import DotMap
 from tensorboardX import SummaryWriter
 
 _tensor_managers = {}
@@ -27,11 +32,96 @@ def getSignalCatcher(name):
   return _debuggers[name]
 
 
-def set_random_seed(seed):
+def set_random_seed(seed, deterministic_cudnn=False):
   random.seed(seed)
   np.random.seed(seed)
   torch.manual_seed(seed)
-  torch.backends.cudnn.deterministic = True
+  if deterministic_cudnn:
+    # performance drop might be resulted in
+    torch.backends.cudnn.deterministic = True
+
+
+def getCudaManager(name):
+  if name not in _cuda_managers:
+    _cuda_managers.update({name: CUDAManager(name)})
+  return _cuda_managers[name]
+
+
+def isnan(*args):
+  assert all([isinstance(arg, torch.Tensor) for arg in args])
+  for arg in args:
+    if torch.isnan(arg):
+      import pdb
+      pdb.set_trace()
+  return args
+
+
+def set_logger(save_path):
+  # log_fmt = '%(asctime)s %(levelname)s %(message)s'
+  # date_fmt = '%d/%m/%Y %H:%M:%S'
+  # formatter = logging.Formatter(log_fmt, datefmt=date_fmt)
+  formatter = MyFormatter()
+
+  # set log level
+  levels = dict(debug=logging.DEBUG,
+                info=logging.INFO,
+                warning=logging.WARNING,
+                error=logging.ERROR,
+                critical=logging.CRITICAL)
+
+  log_level = levels['debug']
+
+  # setup file handler
+  file_handler = logging.FileHandler(os.path.join(save_path + 'log'))
+  file_handler.setFormatter(formatter)
+  file_handler.setLevel(log_level)
+
+  # setup stdio handler
+  stream_handler = logging.StreamHandler()
+  stream_handler.setFormatter(formatter)
+  stream_handler.setLevel(log_level)
+
+  # get logger
+  logger = logging.getLogger('main')
+  logger.setLevel(log_level)
+
+  # add file & stdio handler to logger
+  logger.addHandler(file_handler)
+  logger.addHandler(stream_handler)
+
+
+def prepare_config_and_dirs(args: argparse.Namespace):
+  assert isinstance(args, argparse.Namespace)
+  # load yaml config file
+  yaml_path = os.path.join(args.config_dir, args.config + '.yaml')
+  with open(yaml_path, "r") as f:
+    cfg = DotMap(yaml.safe_load(f))
+  cfg.args = DotMap(vars(args))
+  # postprocess configs
+  if cfg.args.gpu_all:
+    assert len(cfg.args.gpu_ids) <= torch.cuda.device_count()
+    cfg.args.gpu_ids = list(range(torch.cuda.device_count()))
+  # prepare directories if needed
+  if not cfg.args.volatile:
+    save_dir = os.path.join(cfg.dirs.result, cfg.args.config)
+    if os.path.exists(save_dir):
+      print(f'Directory for saving already exists: {save_dir}')
+      ans = input("Do you want to remove existing dirs and files? [Y/N]")
+      if ans.lower() != 'n':
+        shutil.rmtree(save_dir, ignore_errors=True)
+        print(f'Removed previous dirs and files.')
+    print(f'Made new directory for saving: {save_dir}')
+    # yaml file backup
+    os.makedirs(save_dir)
+    shutil.copy(yaml_path, save_dir)
+    # source code backup
+    code_path = os.path.join(save_dir, 'src')
+    shutil.copytree(os.path.abspath(os.path.curdir), code_path,
+                    ignore=lambda src, names: {'.git', '__pycahe__', 'result'})
+    # add more dirs
+    cfg.dirs.save = save_dir
+    cfg.dirs.save_image = 'image'
+  return cfg
 
 
 class SignalCatcher(object):
@@ -62,21 +152,6 @@ class SignalCatcher(object):
       return False
 
 
-def getCudaManager(name):
-  if name not in _cuda_managers:
-    _cuda_managers.update({name: CUDAManager(name)})
-  return _cuda_managers[name]
-
-
-def isnan(*args):
-  assert all([isinstance(arg, torch.Tensor) for arg in args])
-  for arg in args:
-    if torch.isnan(arg):
-      import pdb
-      pdb.set_trace()
-  return args
-
-
 class MyDataParallel(torch.nn.DataParallel):
   """To access the attributes after warpping a module with DataParallel."""
 
@@ -99,6 +174,25 @@ class ParallelizableModule(torch.nn.Module):
         self.__dict__['_modules'][name] = MyDataParallel(module)
 
 
+class ForkablePdb(pdb.Pdb):
+
+  _original_stdin_fd = sys.stdin.fileno()
+  _original_stdin = None
+
+  def __init__(self):
+    pdb.Pdb.__init__(self, nosigint=True)
+
+  def _cmdloop(self):
+    current_stdin = sys.stdin
+    try:
+      if not self._original_stdin:
+        self._original_stdin = os.fdopen(self._original_stdin_fd)
+      sys.stdin = self._original_stdin
+      self.cmdloop()
+    finally:
+      sys.stdin = current_stdin
+
+
 class CUDAManager(object):
   """Global CUDA manager. Ease the pain of carrying cuda config around all over
      the modules.
@@ -110,7 +204,7 @@ class CUDAManager(object):
     self.parallel = False
     self.visible_devices = None
 
-  def set_cuda(self, cuda, manual_seed=999):
+  def set_cuda(self, cuda, manual_seed=None):
     assert isinstance(cuda, bool)
     self.cuda = cuda
     print(f"Global cuda manager '{self.name}' is set to {self.cuda}.")
@@ -163,7 +257,7 @@ class CUDAManager(object):
     if self.cuda is None:
       raise Exception("cuda configuration has to be set "
                       "by calling CUDAManager.set_cuda(boolean)")
-    return obj.cuda(device if self.parallel else 0) if self.cuda else obj
+    return obj.cuda() if self.cuda else obj
     # if (isinstance(obj, torch.nn.Module) and self.parallel and parallel
     #     and not obj.__class__ is MyDataParallel):
     #   obj = MyDataParallel(obj)
@@ -192,57 +286,3 @@ class MyFormatter(logging.Formatter):
     self._fmt = format_orig
 
     return result
-
-
-def set_logger(save_path):
-  # log_fmt = '%(asctime)s %(levelname)s %(message)s'
-  # date_fmt = '%d/%m/%Y %H:%M:%S'
-  # formatter = logging.Formatter(log_fmt, datefmt=date_fmt)
-  formatter = MyFormatter()
-
-  # set log level
-  levels = dict(debug=logging.DEBUG,
-                info=logging.INFO,
-                warning=logging.WARNING,
-                error=logging.ERROR,
-                critical=logging.CRITICAL)
-
-  log_level = levels['debug']
-
-  # setup file handler
-  file_handler = logging.FileHandler(os.path.join(save_path + 'log'))
-  file_handler.setFormatter(formatter)
-  file_handler.setLevel(log_level)
-
-  # setup stdio handler
-  stream_handler = logging.StreamHandler()
-  stream_handler.setFormatter(formatter)
-  stream_handler.setLevel(log_level)
-
-  # get logger
-  logger = logging.getLogger('main')
-  logger.setLevel(log_level)
-
-  # add file & stdio handler to logger
-  logger.addHandler(file_handler)
-  logger.addHandler(stream_handler)
-
-
-def prepare_dir(gin_path):
-  # make directory
-  save_path = os.path.join('result', *gin_path[:-4].split('/')[1:])
-  if os.path.exists(save_path):
-    print(f'Directory for saving already exists: {save_path}')
-    ans = input("Do you want to remove existing dirs and files? [Y/N]")
-    if ans.lower() != 'n':
-      shutil.rmtree(save_path, ignore_errors=True)
-      print(f'Removed previous dirs and files.')
-  print(f'Made new directory for saving: {save_path}')
-  # gin file backup
-  os.makedirs(save_path)
-  shutil.copy(gin_path, save_path)
-  # source code backup
-  code_path = os.path.join(save_path, 'src')
-  shutil.copytree(os.path.abspath(os.path.curdir), code_path,
-                  ignore=lambda src, names: {'.git', '__pycahe__', 'result'})
-  return save_path

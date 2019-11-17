@@ -64,7 +64,7 @@ class MaskMode(object):
 #     pass
 
 
-class Sampler(ParallelizableModule):
+class Sampler(nn.Module):
   """A Sampler module incorporating all other submodules."""
   _save_name = 'meta.params'
 
@@ -73,8 +73,8 @@ class Sampler(ParallelizableModule):
     # arguments
     h_for_each = 3 * 3 * 64
     n_timecode = 3
-    moment = [.0, .5, .9, .99, .999]
-    n_shared_features = len(moment) * 2 + n_timecode
+    self.moment = [.0, .5, .9, .99, .999]
+    n_shared_features = len(self.moment) * 2 + n_timecode
     n_relative_features = 2
     # module attributes
     self.pairwse_attention = nn.Linear(h_for_each, 1)  # TODO: automatic
@@ -88,12 +88,15 @@ class Sampler(ParallelizableModule):
     self.tanh = nn.Tanh()
     # misc
     self.loss_mean = self.acc_mean = None  # for running mean tracking
-    self.new_momentum = lambda: C(torch.tensor(moment))
     self.m = self.new_momentum()  # running mean momentum
     self.t = 0
     self.t_scales = np.linspace(1, np.log(1000) / np.log(10), n_timecode)
-    self.t_encoder = lambda t: [
-        np.tanh(3 * t / 10**s - 1) for s in self.t_scales]
+
+  def t_encoder(self, t):
+    return [np.tanh(3 * t / 10**s - 1) for s in self.t_scales]
+
+  def new_momentum(self):
+    return torch.tensor(self.moment).to(self.pairwse_attention.weight.device)
 
   def forward(self, mask_mode, feature_extraction_fn=None):
     assert isinstance(mask_mode, MaskMode)
@@ -134,7 +137,7 @@ class Sampler(ParallelizableModule):
 
     # time encoding
     self.t += 1
-    time = C(torch.tensor(self.t_encoder(self.t)))
+    time = torch.tensor(self.t_encoder(self.t)).to(loss_mean.device)
 
     # shared feature encoding
     #   log_loss_mean: take log to suppress too large losses

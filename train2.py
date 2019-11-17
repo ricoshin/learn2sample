@@ -8,10 +8,10 @@ import torch
 from loader.metadata import ImagenetMetadata
 from loop2 import loop
 from nn.sampler2 import Sampler
+from shared_optim import SharedAdam, SharedRMSprop
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.utils import MyDataParallel, prepare_dir, set_random_seed
-
 
 IMAGENET_DIR = '/st1/dataset/learn2sample/imagenet_l2s_84_84'
 DEVKIT_DIR = '/v9/whshin/imagenet/ILSVRC2012_devkit_t12'

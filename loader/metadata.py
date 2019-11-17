@@ -359,6 +359,18 @@ class Metadata(object):
       meta_data_list.append(meta_data)
     return meta_data_list
 
+  def split(self, method, ratio=None):
+    assert method in ['exclusive', 'inclusive']
+    if method == 'exclusive':
+      if ratio is None:
+        ratio = ('Support', 1), ('Query', 5)  # 1(100) : 4(400)
+      meta_support, meta_query = self.split_classes(ratio)
+    elif method == 'inclusive':
+      if ratio is None:
+        ratio = ('Support', 5), ('Query', 5)  # 5:5 instances
+      meta_support, meta_query = self.split_instances(ratio)
+    return meta_support, meta_query
+
   def dataset_loader(self, loader_config):
     assert isinstance(loader_config, loader.LoaderConfig)
     return loader_config.get_dataset_loader(self, self.name)
