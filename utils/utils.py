@@ -186,6 +186,7 @@ class ForkablePdb(pdb.Pdb):
     current_stdin = sys.stdin
     try:
       if not self._original_stdin:
+        # TODO: fix Bad file descriptor error
         self._original_stdin = os.fdopen(self._original_stdin_fd)
       sys.stdin = self._original_stdin
       self.cmdloop()

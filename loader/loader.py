@@ -152,7 +152,7 @@ class LoaderConfig(object):
     else:
       batch_sampler = BalancedBatchSampler(
           meta=metadata,
-          class_size=self.class_sizse,
+          class_size=self.class_size,
           sample_size=self.sample_size,
           n_repeat_classes=n_repeat_classes,
       )
@@ -186,5 +186,5 @@ class LoaderConfig(object):
       s = Dataset(*_loader.next(), 'Support')
       q = Dataset(*_loader.next(), 'Query')
       # import pdb; pdb.set_trace()
-      return Episode(s, q, len(s.classwise), name)
+      return C(Episode(s, q, len(s.classwise), name))
     return loader

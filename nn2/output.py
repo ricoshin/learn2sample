@@ -18,28 +18,19 @@ import torch.nn.functional as F
 class ModelOutput(object):
   """A class for dynamically dealing with different types of output."""
 
-  def __init__(self, params_name, dataset_name, n_classes, logits, labels,
-               pairwise_dist, mask=None):
+  def __init__(self, params_name, dataset_name, n_classes, loss, acc, logits,
+               pairwise_dist):
 
     self.params_name = params_name
     self.dataset_name = dataset_name
     self.n_classes = n_classes
-
+    self.loss = loss
+    self.acc = acc
     self.logits = logits
-    self.labels = labels
-    self.pairwise_dist = pairwise_dist
+    self.dist = pairwise_dist
+    utils.ForkablePdb().set_trace()
+    print('a')
 
-    self._mask = mask
-    self.predicted = self.logits.argmax(dim=1)
-
-    self.is_true = self.predicted == labels
-    self.is_false = self.predicted != labels
-    self.acc_sample = self.is_true.float()
-
-    self._conf = None
-    self._loss_m = None
-    self._acc_m = None
-    self._loss_s = None
 
   def __repr__(self):
     return ',\n'.join(['ModelOutput{',

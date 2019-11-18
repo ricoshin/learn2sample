@@ -40,36 +40,13 @@ class MaskMode(object):
     return f"MaskMode({self.unit}, {self.dist})"
 
 
-# def get_sampler(sampler_type):
-#   assert sampler_type in ['pre-sampler', 'post-sampler']
-#   return Sampler
-
-# class MaskGenerator(object):
-#   def __init__(self, unit, dist):
-#     assert isinstance(unit, MaskUnit) and isinstance(dist, MaskDist)
-#     self.unit = unit
-#     self.dist = dist
-#
-#   def generate(self, value):
-#     Mask.new()
-#
-# class Mask(object):
-#   def __init__(self, value, mode, labels):
-#     assert isinstance(mode, MaskMode)
-#     self.value = value
-#     self.mode = mode
-#
-#
-#   def __call__(self, target):
-#     pass
-
-
 class Sampler(nn.Module):
   """A Sampler module incorporating all other submodules."""
   _save_name = 'meta.params'
 
-  def __init__(self, embed_dim, rnn_dim, mask_mode):
+  def __init__(self, embed_dim, rnn_dim, mask_unit):
     super(Sampler, self).__init__()
+    self.mask_unit = mask_unit
     # arguments
     h_for_each = 3 * 3 * 64
     n_timecode = 3
@@ -213,6 +190,21 @@ class Sampler(nn.Module):
     model = cls()
     model.load_state_dict(state_dict)
     return model
+
+  def copy_state_from(self, sampler_src):
+    device = torch.cuda.current_device()
+    with torch.cuda.device(device):
+      self.loade_state_dict(sampler_src.state_dict())
+
+  def copy_grad_to(self, sampler_tar):
+    cpu = torch.cuda.current_device() == torch.device('cpu')
+    for tar, src in zip(sampler_tar.parameters(), self.paramters()):
+      if tar is not None and cpu:
+        return
+      elif cpu:
+        tar._grad = src.grad
+      else:
+        tar._grad = src.grad.cpu()
 
   def cuda_parallel_(self, dict_, parallel):
     if parallel:

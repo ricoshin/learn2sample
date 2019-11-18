@@ -4,13 +4,30 @@ dirs:
   result: result
 
 train:
-  optim: adam  # adam / rmsprop
-  lr: 0.001
+  unroll_steps: 20
+  inner_steps: 500
+  anneal_episodes: 50
+
+
+loader:
+  class_balanced: False
+  split_method: inclusive  # inclusive / exclusive
+  class_size: 10
+  sample_size: 3
+  batch_size: 128
+
+model:
+  lr: 0.01
+  optim: sgd
+  last_layer: metric  # metric / fc
+  distance_type: cosine  # euclidean / cosine
 
 sampler:
-  mask_mode: class  # sample / class
+  lr: 0.001
+  optim: adam  # adam / rmsprop
   embed_dim: 256
   rnn_dim: 256
+  mask_unit: class  # sample / class
   input_more: True
   output_more: True
   temp: 1.0

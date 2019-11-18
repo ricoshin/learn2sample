@@ -50,15 +50,15 @@ def meta_train(cfg):
   shared_sampler = Sampler(
       embed_dim=cfg.sampler.embed_dim,
       rnn_dim=cfg.sampler.rnn_dim,
-      mask_mode=cfg.sampler.mask_mode,
+      mask_unit=cfg.sampler.mask_unit,
   )
   shared_sampler.share_memory()
 
   print('Loading a shared optimizer..')
   shared_optim = {'rmsprop': 'SharedRMSprop', 'adam': 'SharedAdam'}[
-      cfg.train.optim.lower()]
+      cfg.sampler.optim.lower()]
   shared_optim = getattr(optim, shared_optim)(
-      shared_sampler.parameters(), lr=cfg.train.lr)
+      shared_sampler.parameters(), lr=cfg.sampler.lr)
   shared_optim.share_memory()
   #####################################################################
 
