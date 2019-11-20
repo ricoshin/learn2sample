@@ -50,7 +50,10 @@ class RandomBatchSampler(data.Sampler):
       if _n_repeated == 0:
         n_classes = len(self.meta)
         max_n_samples = sum([v for v in self.meta.idx_to_len.values()])
-        sampled_idx = randint(0, max_n_samples, self.batch_size)
+        try:
+          sampled_idx = randint(0, max_n_samples, self.batch_size)
+        except:
+          utils.ForkablePdb().set_trace()
         for i in range(self.batch_size):
           batch.append(sampled_idx[i])
           _to_repeat.append(self.meta.idx_uni_to_bi(sampled_idx[i]))
@@ -106,7 +109,7 @@ class BalancedBatchSampler(data.Sampler):
 class LoaderConfig(object):
   def __init__(self, batch_size=None, class_size=None, sample_size=None,
                class_balanced=False, relabel_in_batch=True, sort_in_batch=True,
-               num_workers=2, pin_memory=False):
+               num_workers=2, pin_memory=False, gpu_id='cpu'):
     """batch_size and (class_size, sample_size) are exclusive."""
     if batch_size is None:
       assert (class_size is not None) and (sample_size is not None)
@@ -119,6 +122,11 @@ class LoaderConfig(object):
     self.batch_size = batch_size
     self.class_size = class_size
     self.sample_size = sample_size
+    self.device = 'cpu'
+
+  def to(self, device):
+    self.divice = device
+    return self
 
   def _stack_batch(self, batch):
     out = None
@@ -167,9 +175,8 @@ class LoaderConfig(object):
         num_workers=self.num_workers,
         pin_memory=self.pin_memory,
     ))
-
     def loader():
-      return C(Dataset(*_loader.next(), name))
+      return Dataset(*_loader.next(), name).to(self.device)
     return loader
 
   def get_episode_loader(self, metadata, name):
@@ -181,10 +188,9 @@ class LoaderConfig(object):
         num_workers=self.num_workers,
         pin_memory=self.pin_memory,
     ))
-
     def loader():
       s = Dataset(*_loader.next(), 'Support')
       q = Dataset(*_loader.next(), 'Query')
       # import pdb; pdb.set_trace()
-      return C(Episode(s, q, len(s.classwise), name))
+      return Episode(s, q, len(s.classwise), name).to(self.device)
     return loader

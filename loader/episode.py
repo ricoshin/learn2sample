@@ -122,6 +122,12 @@ class Dataset(object):
       return x.view(self.n_classes * self.n_samples, *rest_dims)
     return view_elementwise_fn
 
+  def to(self, device=None):
+    imgs = self.imgs.to(device)
+    labels = self.labels.to(device)
+    ids = self.ids  # .to()  # useless for now
+    return Dataset(imgs, labels, ids, self.name)
+
   def cuda(self, device=None):
     imgs = self.imgs.cuda(device)
     labels = self.labels.cuda(device)
@@ -314,6 +320,11 @@ class Episode(object):
   def offset_indices(self, offset_labels, offset_ids):
     return Episode(*[set.offset_indices(offset_labels, offset_ids)
                      for set in self], self.n_total_classes)
+
+  def to(self, device=None):
+    s = self.s.to(device)
+    q = self.q.to(device)
+    return Episode(s, q, self.n_total_classes, self.name)
 
   def cuda(self, device=None):
     s = self.s.cuda(device)

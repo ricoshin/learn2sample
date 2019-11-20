@@ -20,6 +20,7 @@ import torch
 import yaml
 from dotmap import DotMap
 from tensorboardX import SummaryWriter
+from utils import shared_optim
 
 _tensor_managers = {}
 _cuda_managers = {}
@@ -54,6 +55,18 @@ def isnan(*args):
       import pdb
       pdb.set_trace()
   return args
+
+
+def get_shared_optim(optim_name, *args, **kwargs):
+  optim_name = {'rmsprop': 'SharedRMSprop', 'adam': 'SharedAdam'}[
+      optim_name.lower()]
+  return getattr(shared_optim, optim_name)(*args, **kwargs)
+
+
+def get_optim(optim_name, *args, **kwargs):
+  optim_name = {'sgd': 'SGD', 'rmsprop': 'RMSprop', 'adam': 'Adam'}[
+      optim_name.lower()]
+  return getattr(torch.optim, optim_name)(*args, **kwargs)
 
 
 def set_logger(save_path):

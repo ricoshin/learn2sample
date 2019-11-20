@@ -10,11 +10,13 @@ import torch
 import torch.multiprocessing as mp
 from loader.metadata import ImagenetMetadata
 from loop_rl import loop
+from nn2.model import Model
 from nn2.sampler2 import Sampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from utils import shared_optim as optim
+
 from utils import utils
+from utils.helpers import Resize, OptimGetter
 
 IMAGENET_DIR = '/st1/dataset/learn2sample/imagenet_l2s_84_84'
 DEVKIT_DIR = '/v9/whshin/imagenet/ILSVRC2012_devkit_t12'
@@ -43,22 +45,37 @@ parser.add_argument('--gpu_all', action='store_true',
 def meta_train(cfg):
   # [ImageNet 1K] meta-train:100 / meta-valid:450 / meta-test:450 (classes)
   meta_data = ImagenetMetadata.load_or_make(
-      data_dir=IMAGENET_DIR, devkit_dir=DEVKIT_DIR, remake=False)
+      data_dir=cfg.dirs.imagenet,
+      devkit_dir=cfg.dirs.imagenet_devkit,
+      remake=False
+  )
   meta_train, meta_valid, meta_test = meta_data.split_classes((2, 4, 4))
 
   print('Loading a shared sampler..')
+  # encoder (feature extractor)
+  if cfg.sampler.encoder.reuse_model:
+    encoder = None
+  else:
+    encoder = Model(
+          input_dim=cfg.loader.input_dim,
+          embed_dim=cfg.model.embed_dim,
+          channels=cfg.sampler.encoder.channels,
+          kernels=cfg.sampler.encoder.kernels,
+          preprocess=Resize(size=32, mode='area'),
+          distance_type=cfg.model.distance_type,
+      )
+  # sampler
   shared_sampler = Sampler(
-      embed_dim=cfg.sampler.embed_dim,
+      embed_dim=cfg.model.embed_dim,
       rnn_dim=cfg.sampler.rnn_dim,
       mask_unit=cfg.sampler.mask_unit,
+      encoder=encoder,
   )
   shared_sampler.share_memory()
 
   print('Loading a shared optimizer..')
-  shared_optim = {'rmsprop': 'SharedRMSprop', 'adam': 'SharedAdam'}[
-      cfg.sampler.optim.lower()]
-  shared_optim = getattr(optim, shared_optim)(
-      shared_sampler.parameters(), lr=cfg.sampler.lr)
+  getter = OptimGetter(cfg.sampler.optim, lr=cfg.sampler.lr, shared=True)
+  shared_optim = getter(shared_sampler.parameters())
   shared_optim.share_memory()
   #####################################################################
 

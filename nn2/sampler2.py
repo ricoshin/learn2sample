@@ -1,6 +1,8 @@
+import copy
 import math
 import os
 import sys
+from collections import namedtuple
 from enum import Enum, auto
 
 import gin
@@ -10,8 +12,8 @@ import torch.nn as nn
 from torch.distributions.relaxed_bernoulli import RelaxedBernoulli
 from torch.nn import functional as F
 from utils import utils
+from utils.helpers import BaseModule, weights_init, norm_col_init
 from utils.utils import MyDataParallel, ParallelizableModule
-from collections import namedtuple
 
 C = utils.getCudaManager('default')
 
@@ -40,131 +42,76 @@ class MaskMode(object):
     return f"MaskMode({self.unit}, {self.dist})"
 
 
-class Sampler(nn.Module):
+class Action(object):
+  def __init__(self, logits):
+    self.logits = logits
+    self.prob = F.softmax(logits, dim=1)
+    self.log_prob = F.log_softmax(logits, dim=1)
+    self.entropy = -(self.log_prob * self.prob).sum(1)
+
+  def sample(self):
+    return self.prob.multinomial(1).data
+
+
+class Sampler(BaseModule):
   """A Sampler module incorporating all other submodules."""
   _save_name = 'meta.params'
 
-  def __init__(self, embed_dim, rnn_dim, mask_unit):
+  def __init__(self, embed_dim, rnn_dim, mask_unit, encoder=None):
     super(Sampler, self).__init__()
+    self.embed_dim = embed_dim
+    self.rnn_dim = rnn_dim
     self.mask_unit = mask_unit
-    # arguments
-    h_for_each = 3 * 3 * 64
-    n_timecode = 3
-    self.moment = [.0, .5, .9, .99, .999]
-    n_shared_features = len(self.moment) * 2 + n_timecode
-    n_relative_features = 2
-    # module attributes
-    self.pairwse_attention = nn.Linear(h_for_each, 1)  # TODO: automatic
-    self.shared_encoder = nn.Linear(n_shared_features, h_for_each)
-    self.relative_encoder = nn.Linear(n_relative_features, h_for_each)
-    self.mask_generator = nn.Linear(h_for_each * 2, 2)
-    self.lr_generator = nn.Linear(h_for_each * 2, 1)
-    # functionals
-    self.softmax = nn.Softmax(dim=1)
-    self.sigmoid = nn.Sigmoid()
-    self.tanh = nn.Tanh()
-    # misc
-    self.loss_mean = self.acc_mean = None  # for running mean tracking
-    self.m = self.new_momentum()  # running mean momentum
-    self.t = 0
-    self.t_scales = np.linspace(1, np.log(1000) / np.log(10), n_timecode)
+    self.encoder = encoder
+    # rnn + linears
+    self.lstm = nn.LSTMCell(embed_dim, rnn_dim)
+    self.actor_linear = nn.Linear(rnn_dim, 2)
+    self.critic_linear = nn.Linear(rnn_dim, 1)
+    # initialization
+    self.apply(weights_init)
+    self.actor_linear.weight.data = norm_col_init(
+        self.actor_linear.weight.data, 0.01)
+    self.actor_linear.bias.data.fill_(0)
+    self.critic_linear.weight.data = norm_col_init(
+        self.critic_linear.weight.data, 1.0)
+    self.critic_linear.bias.data.fill_(0)
+    self.lstm.bias_ih.data.fill_(0)
+    self.lstm.bias_hh.data.fill_(0)
 
-  def t_encoder(self, t):
-    return [np.tanh(3 * t / 10**s - 1) for s in self.t_scales]
+  def moments_statistics(self, x, dim, eps=1e-8, detach=True):
+    """returns: [mean, variance, skewness, kurtosis]"""
+    mean = x.mean(dim=dim, keepdim=True)
+    var = x.var(dim=dim, keepdim=True)
+    std = var.sqrt()
+    skew = ((x - mean)**3 / (std**3 + eps)).mean(dim=dim, keepdim=True) + eps
+    kurt = ((x - mean)**4 / (std**4 + eps)).mean(dim=dim, keepdim=True) + eps
+    out = [mean, var, skew, kurt]
+    if detach:
+      out = list(map(lambda x: getattr(x, 'detach')(), out))
+    return torch.cat(out, dim=-1)
 
-  def new_momentum(self):
-    return torch.tensor(self.moment).to(self.pairwse_attention.weight.device)
+  def preprocess(x, labels):
+    loss = self.mean_by_labels(state.loss, state.labels)
+    acc = self.mean_by_labels(state.acc.float(), state.labels)
+    dist = self.mean_by_labels(state.dist.mean(1), state.labels)
+    loss = self.moments_statistics(loss, dim=0)
 
-  def forward(self, mask_mode, feature_extraction_fn=None):
-    assert isinstance(mask_mode, MaskMode)
 
-    if feature_extraction_fn is not None:
-      assert callable(feature_extraction_fn)
-      output = feature_extraction_fn()
-      pairwise_dist = output.pairwise_dist.detach()
-      classwise_loss = output.classwise_loss.detach()
-      classwise_acc = output.classwise_acc.detach()
-      n_classes = output.n_classes
 
-    # attention-based pairwse distance information
-    atten = self.softmax(self.pairwse_attention(pairwise_dist))
-    # [n_classes, hidden_dim]
-    p = self.tanh((pairwise_dist * atten).sum(dim=1))
+  def mean_by_labels(self, tensor, labels):
+    mean = []
+    for i in set(labels.tolist()):
+      mean.append(tensor[labels == i].mean(0, keepdim=True))
+    return torch.cat(mean, dim=0)
 
-    # loss
-    loss_class = classwise_loss / np.log(n_classes)
-    loss_mean = loss_class.mean()
-    loss_rel = (loss_class - loss_mean) / loss_class.std()  # [n_classes]
+  def forward(self, state):
+    loss = self.preprocess(state.loss, state.labels)
+    acc = self.preprocess(state.acc.float(), state.labels)
+    dist = self.preprocess(state.dist.mean(1), state.labels)
+    utils.ForkablePdb().set_trace()
+    print('a')
 
-    # acc
-    acc_class = classwise_acc
-    acc_mean = classwise_acc.mean()
-    acc_rel = (acc_class - acc_mean) / acc_class.std()  # [n_classes]
 
-    # running mean of loss & acc
-    loss_mean = loss_mean.repeat(len(self.m))
-    acc_mean = acc_mean.repeat(len(self.m))
-
-    if self.loss_mean is None:
-      self.loss_mean = loss_mean  # [n_momentum]
-      self.acc_mean = acc_mean  # [n_momentum]
-    else:
-      self.loss_mean = self.m * self.loss_mean + (1 - self.m) * loss_mean
-      self.acc_mean = self.m * self.acc_mean + (1 - self.m) * acc_mean
-
-    # time encoding
-    self.t += 1
-    time = torch.tensor(self.t_encoder(self.t)).to(loss_mean.device)
-
-    # shared feature encoding
-    #   log_loss_mean: take log to suppress too large losses
-    #                  then add 1 to avoid negative infinity
-    log_loss_mean = (self.loss_mean + 1).log()
-    s = torch.cat([log_loss_mean, self.acc_mean, time], dim=0).detach()
-    s = self.tanh(self.shared_encoder(s)).repeat(n_classes, 1)
-    # s: [n_classes, hidden_dim]
-
-    # relative feature encoding
-    r = torch.stack([loss_rel, acc_rel], dim=1).detach()
-    r = self.tanh(self.relative_encoder(r))
-    # r: [n_classes, hidden_dim]
-
-    # mask generation (binary classification)
-    h = torch.cat([p, s + r], dim=1)
-    mask_logits = self.mask_generator(h)
-
-    # learning rate generation
-    h_mean = self.tanh(h.mean(dim=0))
-    lr_logits = self.lr_generator(h_mean)
-    lr = F.softplus(lr_logits) * 0.1
-
-    #####################################################################
-    # on_off_style = ['softmax', 'sigmoid'][1]  # TODO: global argument
-
-    # soft mask
-    if mask_mode.dist is MaskDist.SOFT:
-      # if on_off_style == 'sigmoid':
-      mask = self.sigmoid(mask_logits[:, 0])  # TODO: logit[:, 1] is redundant
-    elif mask_mode.dist is MaskDist.RL:
-      # elif on_off_style == 'softmax':
-      mask = self.softmax(mask_logits)  # This guy is for RL case
-    # discrete mask
-    #####################################################################
-    elif mask_mode.dist is MaskDist.DISCRETE:
-        mask = lr_logits[:, 0].max(dim=1)[1]  # TODO: logit[:, 1] is redundant
-      # concrete mask
-    elif mask_mode.dist is MaskDist.CONCRETE:
-        # infer Bernoulli parameter
-        mean = self.sigmoid(mask_logits[:, 0])
-        sigma = F.softplus(mask_logits[:, 1]) * 0.1
-        eps = torch.randn(mean.size()).to(mean.device)
-        # continously relaxed Bernoulli
-        probs = mean + (sigma * eps)
-        temp = torch.tensor([0.1]).to(mean.device)
-        mask = RelaxedBernoulli(temp, probs=probs)
-        # mask = mask.rsample()
-        if torch.isnan(mask.rsample()).sum() > 0:
-          import pdb; pdb.set_trace()
 
     return mask, lr
 
@@ -191,13 +138,15 @@ class Sampler(nn.Module):
     model.load_state_dict(state_dict)
     return model
 
+  def new(self):
+    return Sampler(self.embed_dim, self.rnn_dim, self.mask_unit, self.encoder)
+
   def copy_state_from(self, sampler_src):
-    device = torch.cuda.current_device()
-    with torch.cuda.device(device):
-      self.loade_state_dict(sampler_src.state_dict())
+    self.load_state_dict(sampler_src.state_dict())
+    self.to(self.device)
 
   def copy_grad_to(self, sampler_tar):
-    cpu = torch.cuda.current_device() == torch.device('cpu')
+    cpu = self.device == torch.device('cpu')
     for tar, src in zip(sampler_tar.parameters(), self.paramters()):
       if tar is not None and cpu:
         return

@@ -3,13 +3,16 @@ dirs:
   imagenet_devkit: /v9/whshin/imagenet/ILSVRC2012_devkit_t12
   result: result
 
-train:
-  unroll_steps: 20
-  inner_steps: 500
-  anneal_episodes: 50
-
+steps:
+  inner:
+    max: 500
+    unroll: 20
+  outer:
+    max: 10000
+    anneal: 50  # 0 = no annealing
 
 loader:
+  input_dim: [3, 84, 84]
   class_balanced: False
   split_method: inclusive  # inclusive / exclusive
   class_size: 10
@@ -19,18 +22,29 @@ loader:
 model:
   lr: 0.01
   optim: sgd
+  embed_dim: 500
+  channels: [64, 64, 64, 64]
+  kernels: [3, 3, 3, 3]
   last_layer: metric  # metric / fc
   distance_type: cosine  # euclidean / cosine
 
 sampler:
   lr: 0.001
   optim: adam  # adam / rmsprop
-  embed_dim: 256
   rnn_dim: 256
   mask_unit: class  # sample / class
   input_more: True
   output_more: True
   temp: 1.0
+  encoder:
+    reuse_model: False
+    channels: [64, 64]
+    kernels: [3, 3]
+
+rl:
+  gamma: 0.99
+  gae: False
+  tau: 1.00
 
 logs:
   log_steps: 20

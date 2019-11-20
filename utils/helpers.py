@@ -1,7 +1,85 @@
+import numpy as np
 import torch
+import torch.nn.functional as F
 from loader.episode import Episode
 from loader.metadata import Metadata
 from nn.output import ModelOutput
+from utils import shared_optim, utils
+
+
+def norm_col_init(weights, std=1.0):
+  x = torch.randn(weights.size())
+  x *= std / torch.sqrt((x**2).sum(1, keepdim=True))
+  return x
+
+
+def weights_init(m):
+  classname = m.__class__.__name__
+  if classname.find('Conv') != -1:
+    weight_shape = list(m.weight.data.size())
+    fan_in = np.prod(weight_shape[1:4])
+    fan_out = np.prod(weight_shape[2:4]) * weight_shape[0]
+    w_bound = np.sqrt(6. / (fan_in + fan_out))
+    m.weight.data.uniform_(-w_bound, w_bound)
+    m.bias.data.fill_(0)
+  elif classname.find('Linear') != -1:
+    weight_shape = list(m.weight.data.size())
+    fan_in = weight_shape[1]
+    fan_out = weight_shape[0]
+    w_bound = np.sqrt(6. / (fan_in + fan_out))
+    m.weight.data.uniform_(-w_bound, w_bound)
+    m.bias.data.fill_(0)
+
+
+class Resize():
+  def __init__(self, size=32, mode='area'):
+    self.size = size
+    self.mode = mode
+
+  def __call__(self, x):
+    return F.interpolate(x, size=self.size, mode=self.mode)
+
+
+class Flatten(torch.nn.Module):
+  def forward(self, input):
+    return input.view(input.size(0), -1)
+
+
+class BaseModule(torch.nn.Module):
+  def __init__(self, *args, **kwargs):
+    self.device = 'cpu'
+    super(BaseModule, self).__init__(*args, **kwargs)
+
+  def to(self, device, non_blocking=False):
+    self.device = device if device is not None else self.device
+    return super(BaseModule, self).to(device=device, non_blocking=non_blocking)
+
+  def cuda(self, device):
+    raise NotImplemented('Use .to() instead of .cuda()')
+
+  def cpu(self, device):
+    raise NotImplemented('Use .to() instead of .cpu()')
+
+
+class OptimGetter():
+  """This class helps the user to renew registered parameters in optimizer
+  while retaining all the other arguments such as learning rate.
+  """
+
+  def __init__(self, optim_name, shared=False, **kwargs):
+    self.optim_name = optim_name
+    self.shared = shared
+    self.kwargs = kwargs
+
+  def __call__(self, params):
+    if self.shared:
+      optim_name = {'rmsprop': 'SharedRMSprop', 'adam': 'SharedAdam'}[
+          self.optim_name.lower()]
+      return getattr(shared_optim, optim_name)(params, **self.kwargs)
+    else:
+      optim_name = {'sgd': 'SGD', 'rmsprop': 'RMSprop', 'adam': 'Adam'}[
+          self.optim_name.lower()]
+      return getattr(torch.optim, optim_name)(params, **self.kwargs)
 
 
 class InnerStepScheduler():
@@ -25,6 +103,43 @@ class InnerStepScheduler():
       print('Inner step scheduled : '
             f'{cur_inner_steps}/{self.inner_steps} ({r*100:5.2f}%)')
     return cur_inner_steps
+
+
+class LoopMananger():
+  def __init__(self, done, steps):
+    self.done = done
+    self.inner_steps = steps.inner.max
+    self.outer_steps = steps.outer.max
+    self.unroll_steps = steps.inner.unroll
+    # utils.ForkablePdb().set_trace()
+    self.inner_scheduler = InnerStepScheduler(
+        outer_steps=steps.outer.max,
+        inner_steps=steps.inner.max,
+        anneal_outer_steps=steps.outer.anneal,
+    )
+    self.inner_step = 0
+    self.outer_step = 0
+
+  def __iter__(self):
+    for i in range(1, self.outer_steps):
+      for j in range(1, self.inner_scheduler(i)):
+        if self.done.value:
+          break
+        self.outer_step = i
+        self.inner_step = j
+        yield i, j
+
+  def start_of_unroll(self):
+    return (self.inner_step - 1) % self.unroll_steps == 0
+
+  def end_of_unroll(self):
+    return self.inner_step % self.unroll_steps == 0
+
+  def start_of_episode(self):
+    return self.inner_step == 1
+
+  def end_of_episode(self):
+    return self.inner_step == self.inner_steps
 
 
 class Logger():

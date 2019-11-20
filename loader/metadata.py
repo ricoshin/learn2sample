@@ -12,11 +12,14 @@ import scipy.io as sio
 from loader import loader
 from torch.utils import data
 from tqdm import tqdm
+from utils import utils
 
 EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp',
               '.pgm', '.tif', '.tiff', '.webp', '.pt')
 
 # scanning function
+
+
 def scandir(dir):
   if sys.version_info >= (3, 5):
     return [d.name for d in os.scandir(dir) if d.is_dir()]
@@ -25,6 +28,7 @@ def scandir(dir):
 
 
 _METADATA_DEFAULT_NAME = 'Metadata'
+
 
 class Metadata(object):
   def __init__(self, name=_METADATA_DEFAULT_NAME, **kwargs):
@@ -41,8 +45,7 @@ class Metadata(object):
 
   def __repr__(self):
     return ('Metadata' + self.dict_names.__repr__() + f'\n\tname={self.name}, '
-      f'n_classes={len(self)}, n_samples_mean={int(self.n_samples_mean)})')
-
+            f'n_classes={len(self)}, n_samples_mean={int(self.n_samples_mean)})')
 
   def __getitem__(self, rel_idx):
     return self.idx_to_samples[self.abs_idx[rel_idx]]
@@ -269,7 +272,7 @@ class Metadata(object):
       class_to_idx[abs_idx] = self.class_to_idx[class_]
       idx_to_samples[abs_idx] = self.idx_to_samples[abs_idx]
     return self.new(
-      class_to_idx, class_to_idx, idx_to_samples, name=_METADATA_DEFAULT_NAME)
+        class_to_idx, class_to_idx, idx_to_samples, name=_METADATA_DEFAULT_NAME)
 
   def sample_classes(self, num, name=_METADATA_DEFAULT_NAME):
     sampled_idx = np.random.choice(
@@ -287,7 +290,7 @@ class Metadata(object):
     return meta
 
   def _get_split_name_and_ratio(self, ratio):
-    if isinstance(ratio[0], (list,tuple)):
+    if isinstance(ratio[0], (list, tuple)):
       for i in range(len(ratio)):
         assert len(ratio[i]) == 2
         assert isinstance(ratio[i][0], str)
@@ -299,6 +302,7 @@ class Metadata(object):
       names = None
     ratio = [r / sum(ratio) for r in ratio]
     assert all([0. < r < 1. for r in ratio])
+    ratio = np.cumsum(ratio)  # cumulaitive sum
     return names, ratio
 
   def split_classes(self, ratio, shuffle=True):
@@ -340,6 +344,7 @@ class Metadata(object):
     names, ratio = self._get_split_name_and_ratio(ratio)
     idx_to_samples_all = [{} for i in range(len(ratio))]
     for class_idx, samples in self.idx_to_samples.items():
+      # for each class
       len_ = len(samples)
       sample_idx = list(range(len_))
       if shuffle:
@@ -481,4 +486,4 @@ class ImagenetMetadata(Metadata):
       class_to_wnid[class_] = self.class_to_wnid[class_]
       idx_to_samples[abs_idx] = self.idx_to_samples[abs_idx]
     return self.new(
-      wnids, wnid_to_idx, idx_to_samples, classes, class_to_wnid, name=name)
+        wnids, wnid_to_idx, idx_to_samples, classes, class_to_wnid, name=name)
