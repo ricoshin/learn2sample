@@ -64,7 +64,9 @@ class Sampler(BaseModule):
     self.mask_unit = mask_unit
     self.encoder = encoder
     # rnn + linears
-    self.lstm = nn.LSTMCell(embed_dim, rnn_dim)
+    input_dim = 3 * 5  # [loss, acc, dist] x [value, mean, var, skew, kurt]
+    self.input_linear = nn.Linear(input_dim, rnn_dim)
+    self.lstm = nn.LSTMCell(rnn_dim, rnn_dim)
     self.actor_linear = nn.Linear(rnn_dim, 2)
     self.critic_linear = nn.Linear(rnn_dim, 1)
     # initialization
@@ -77,6 +79,14 @@ class Sampler(BaseModule):
     self.critic_linear.bias.data.fill_(0)
     self.lstm.bias_ih.data.fill_(0)
     self.lstm.bias_hh.data.fill_(0)
+    # lstm states
+    self.reset_states()
+
+  def mean_by_labels(self, tensor, labels):
+    mean = []
+    for i in set(labels.tolist()):
+      mean.append(tensor[labels == i].mean(0, keepdim=True))
+    return torch.cat(mean, dim=0)
 
   def moments_statistics(self, x, dim, eps=1e-8, detach=True):
     """returns: [mean, variance, skewness, kurtosis]"""
@@ -90,34 +100,42 @@ class Sampler(BaseModule):
       out = list(map(lambda x: getattr(x, 'detach')(), out))
     return torch.cat(out, dim=-1)
 
-  def preprocess(x, labels):
-    loss = self.mean_by_labels(state.loss, state.labels)
-    acc = self.mean_by_labels(state.acc.float(), state.labels)
-    dist = self.mean_by_labels(state.dist.mean(1), state.labels)
-    loss = self.moments_statistics(loss, dim=0)
+  def preprocess(self, x, labels):
+    x_mean = self.mean_by_labels(x, labels)
+    x_stat = self.moments_statistics(x_mean, dim=0)
+    x_mean = x_mean.unsqueeze(1)
+    x_stat = x_stat.repeat(x_mean.size(0), 1)
+    return torch.cat([x_mean, x_stat], dim=1)
 
+  def zero_states(self, batch_size):
+    self.hx = torch.zeros(batch_size, self.rnn_dim)
+    self.cx = torch.zeros(batch_size, self.rnn_dim)
 
+  def reset_states(self):
+    self.hx, self.cx = None, None
 
-  def mean_by_labels(self, tensor, labels):
-    mean = []
-    for i in set(labels.tolist()):
-      mean.append(tensor[labels == i].mean(0, keepdim=True))
-    return torch.cat(mean, dim=0)
+  def detach_states(self):
+    if not hasattr(self, 'hx'):
+      raise RuntimeError('Sampler.hx does NOT exist!')
+    self.hx = self.hx.detach()
+    self.cx = self.cx.detach()
 
   def forward(self, state):
+    # preprocess [value, mean, skew, kurt]
     loss = self.preprocess(state.loss, state.labels)
     acc = self.preprocess(state.acc.float(), state.labels)
     dist = self.preprocess(state.dist.mean(1), state.labels)
-    utils.ForkablePdb().set_trace()
-    print('a')
-
-
-
-    return mask, lr
-
-  def initialize(self):
-    self.t = 0  # timestamp
-    self.loss_mean = self.acc_mean = None  # running mean
+    # concatenat preprocessed tensors [loss, acc, dist]
+    x = torch.cat([loss, acc, dist], dim=1).detach()
+    #   [n_class, input_dim]
+    # create states at the frist step
+    if self.hx is None:
+      assert self.cx is None
+      self.zero_states(x.size(0))
+    # unroll one step
+    x = self.input_linear(x)
+    self.hx, self.cx = self.lstm(x, (self.hx, self.cx))
+    return self.critic_linear(self.hx), self.actor_linear(self.hx)
 
   def save(self, save_path=None):
     if save_path:

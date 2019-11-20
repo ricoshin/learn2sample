@@ -140,6 +140,7 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
     sampler.copy_grad_to(shared_sampler)
     shared_optim.step()
     # detach
+    sampler.detach_states()
 
     if m.end_of_episode():
       state = env.reset()
