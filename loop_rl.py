@@ -100,8 +100,9 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
       actions, values, rewards = [], [], []
 
     ############################################################################
-    action, value = sampler(state)
-    state, reward = env(action.sample())
+    action_, value, encoder_loss = sampler(state)
+    action = action_.sample()
+    state, reward = env(action.instance)
     actions.append(action)
     values.append(value)
     rewards.append(reward)
@@ -126,7 +127,8 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
       value_loss += 0.5 * td.pow(2)
       if not cfg.rl.gae:
         # Default actor-critic policy loss
-        policy_loss -= action[i].log_prob * td.detach().squeeze()
+        utils.ForkablePdb().set_trace()
+        policy_loss -= actions[i].log_probs * td.detach().squeeze()
       else:
         # Generalized Advantage Estimation
         with torch.no_grad():
@@ -136,7 +138,7 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
 
     # update global sampler
     sampler.zero_grad()
-    (policy_loss + value_loss).backward()
+    (policy_loss + value_loss + encoder_loss).backward()
     sampler.copy_grad_to(shared_sampler)
     shared_optim.step()
     # detach

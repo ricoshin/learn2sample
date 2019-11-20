@@ -9,10 +9,11 @@ import gin
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.distributions.relaxed_bernoulli import RelaxedBernoulli
+from dotmap import DotMap
+from torch.distributions.categorical import Categorical
 from torch.nn import functional as F
 from utils import utils
-from utils.helpers import BaseModule, weights_init, norm_col_init
+from utils.helpers import BaseModule, norm_col_init, weights_init
 from utils.utils import MyDataParallel, ParallelizableModule
 
 C = utils.getCudaManager('default')
@@ -43,14 +44,28 @@ class MaskMode(object):
 
 
 class Action(object):
-  def __init__(self, logits):
-    self.logits = logits
-    self.prob = F.softmax(logits, dim=1)
-    self.log_prob = F.log_softmax(logits, dim=1)
-    self.entropy = -(self.log_prob * self.prob).sum(1)
+  def __init__(self, probs):
+    self.m = Categorical(probs)
+
+  @property
+  def entropy(self):
+    return self.m.entropy()
+
+  @property
+  def probs(self):
+    return self.m.probs()
 
   def sample(self):
-    return self.prob.multinomial(1).data
+    instance = self.m.sample()
+    probs = self.m.probs
+    log_probs = self.m.log_prob(instance)
+    entropy = self.m.entropy()
+    return DotMap(dict(
+        instance=instance,
+        probs=probs,
+        log_probs=log_probs,
+        entropy=entropy,
+    ))
 
 
 class Sampler(BaseModule):
@@ -121,10 +136,16 @@ class Sampler(BaseModule):
     self.cx = self.cx.detach()
 
   def forward(self, state):
+    # encoder
+    if self.encoder is not None:
+      encoded = self.encoder(state.meta_s)
+      encoder_loss = F.mse_loss(encoded.embed, state.embed.detach())
+    else:
+      encoder_loss = 0
     # preprocess [value, mean, skew, kurt]
-    loss = self.preprocess(state.loss, state.labels)
-    acc = self.preprocess(state.acc.float(), state.labels)
-    dist = self.preprocess(state.dist.mean(1), state.labels)
+    loss = self.preprocess(encoded.loss, encoded.labels)
+    acc = self.preprocess(encoded.acc.float(), encoded.labels)
+    dist = self.preprocess(encoded.dist.mean(1), encoded.labels)
     # concatenat preprocessed tensors [loss, acc, dist]
     x = torch.cat([loss, acc, dist], dim=1).detach()
     #   [n_class, input_dim]
@@ -135,7 +156,13 @@ class Sampler(BaseModule):
     # unroll one step
     x = self.input_linear(x)
     self.hx, self.cx = self.lstm(x, (self.hx, self.cx))
-    return self.critic_linear(self.hx), self.actor_linear(self.hx)
+    # action
+    logits = self.actor_linear(self.hx)
+    probs = F.softmax(logits, dim=1)
+    action = Action(probs)
+    # value
+    value = self.critic_linear(self.hx)
+    return action, value, encoder_loss
 
   def save(self, save_path=None):
     if save_path:

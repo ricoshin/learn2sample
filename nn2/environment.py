@@ -55,14 +55,14 @@ class Environment(object):
       Args:
         action: instance/class selection mask
       Returns:
-        reward, state
+        state, reward
     """
     if not hasattr(self, 'meta_s_loader'):
       raise RuntimeError('Do .reset() first before running .step().')
 
     self.n_episode += 1
 
-    if action:
+    if action is not None:
       # instance/class selection
       if self.mask_unit == 'instance':
         mata_s = self.mata_s.masked_select(action)

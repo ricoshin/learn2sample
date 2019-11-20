@@ -143,9 +143,11 @@ class Model(BaseModule):
 
     n_samples = x.size(0)
     x_embed = x.view(n_samples, -1)  # [n_samples, embed_dim(576)]
+    support_embed = x_embed[:n_samples // 2]
+    query_embed = x_embed[n_samples // 2:]
     dist = self._pairwise_dist(
-        support_embed=x_embed[:n_samples // 2],
-        query_embed=x_embed[n_samples // 2:],
+        support_embed=support_embed,
+        query_embed=query_embed,
         labels=data.q.labels,
     )
 
@@ -158,7 +160,10 @@ class Model(BaseModule):
     else:
       raise Exception(f'Unknown last_layer: {self.last_layer}')
 
-    loss = F.cross_entropy(logits, y, reduction='none')
+    try:
+      loss = F.cross_entropy(logits, y, reduction='none')
+    except:
+      utils.ForkablePdb().set_trace()
     acc = logits.argmax(dim=1) == y
 
     if debug:
@@ -168,6 +173,7 @@ class Model(BaseModule):
     return DotMap(dict(
         loss=loss,
         acc=acc,
+        embed=x_embed,
         dist=dist,
         logits=logits,
         labels=y,

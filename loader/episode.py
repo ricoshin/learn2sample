@@ -10,6 +10,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 import torch
+from utils import utils
+
+
+def new_labels(ids):
+  """re-number class labels."""
+  ids, device = ids.tolist(), ids.device
+  id_to_label = {id: label for label, id in enumerate(set(ids))}
+  out = torch.tensor([id_to_label[id] for id in ids]).to(device)
+  return out
 
 
 class DatasetClassIndexer(object):
@@ -41,8 +50,8 @@ class DatasetClassIndexer(object):
     for id in selcted_class_idx:
       mask += self.dataset.labels == id
     imgs = self.dataset.imgs[mask]
-    labels = self.dataset.labels[mask]
     ids = self.dataset.ids[mask]
+    labels = new_labels(ids)
     return Dataset(imgs, labels, ids, self.dataset.name)
 
   def masked_select(self, mask):
@@ -84,8 +93,8 @@ class Dataset(object):
   def __getitem__(self, key):
     """instacne indexing"""
     imgs = self.imgs[key].view(-1)
-    labels = self.labels[key].view(-1)
     ids = self.ids[key].view(-1)
+    labels = new_labels(ids)
     # view() to avoid 0-dim when choosing single instance
     return Dataset(imgs, labels, ids, self.name)
 
