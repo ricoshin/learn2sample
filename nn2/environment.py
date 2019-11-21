@@ -48,6 +48,7 @@ class Environment(object):
     self.base_model.copy_state_from(self.model)
     self.meta_s = self.meta_s_loader()
     self.meta_q = self.meta_q_loader()
+    # utils.ForkablePdb().set_trace()
     return self(action=None)[0]  # return state only
 
   def __call__(self, action=None, loop_manager=None):

@@ -134,13 +134,13 @@ class Dataset(object):
   def to(self, device=None):
     imgs = self.imgs.to(device)
     labels = self.labels.to(device)
-    ids = self.ids  # .to()  # useless for now
+    ids = self.ids.to(device)
     return Dataset(imgs, labels, ids, self.name)
 
   def cuda(self, device=None):
     imgs = self.imgs.cuda(device)
     labels = self.labels.cuda(device)
-    ids = self.ids  # .cuda()  # useless for now
+    ids = self.ids.cuda()
     return Dataset(imgs, labels, ids, self.name)
 
   def cpu(self):

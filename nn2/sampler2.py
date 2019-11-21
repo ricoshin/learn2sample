@@ -78,9 +78,13 @@ class Sampler(BaseModule):
     self.rnn_dim = rnn_dim
     self.mask_unit = mask_unit
     self.encoder = encoder
+    # [loss, acc, dist] x [value, mean, var, skew, kurt] (batch_sz: n_class)
+    classwise_input_dim = 3 * 5
+    # [loss, acc, dist] x [mean, var, skew, kurt] (batch_sz: 1)
+    global_input_dim = 3 * 4
     # rnn + linears
-    input_dim = 3 * 5  # [loss, acc, dist] x [value, mean, var, skew, kurt]
-    self.input_linear = nn.Linear(input_dim, rnn_dim)
+    self.classwise_linear = nn.Linear(classwise_input_dim, rnn_dim)
+    self.global_linear = nn.Linear(global_input_dim, rnn_dim)
     self.lstm = nn.LSTMCell(rnn_dim, rnn_dim)
     self.actor_linear = nn.Linear(rnn_dim, 2)
     self.critic_linear = nn.Linear(rnn_dim, 1)
@@ -95,7 +99,12 @@ class Sampler(BaseModule):
     self.lstm.bias_ih.data.fill_(0)
     self.lstm.bias_hh.data.fill_(0)
     # lstm states
-    self.reset_states()
+    self.zero_states()
+
+  def to(self, *args, **kwargs):
+    self.hx, self.cx = self.hx.to(self.device), self.cx.to(self.device)
+
+    return super(Sampler, self).to(*args, **kwargs)
 
   def mean_by_labels(self, tensor, labels):
     mean = []
@@ -116,18 +125,15 @@ class Sampler(BaseModule):
     return torch.cat(out, dim=-1)
 
   def preprocess(self, x, labels):
-    x_mean = self.mean_by_labels(x, labels)
-    x_stat = self.moments_statistics(x_mean, dim=0)
-    x_mean = x_mean.unsqueeze(1)
-    x_stat = x_stat.repeat(x_mean.size(0), 1)
-    return torch.cat([x_mean, x_stat], dim=1)
+    x_mean_ = self.mean_by_labels(x, labels)
+    x_stat_ = self.moments_statistics(x_mean_, dim=0)
+    x_mean = x_mean_.unsqueeze(1)
+    x_stat = x_stat_.repeat(x_mean.size(0), 1)
+    return torch.cat([x_mean, x_stat], dim=1), x_stat_
 
-  def zero_states(self, batch_size):
-    self.hx = torch.zeros(batch_size, self.rnn_dim)
-    self.cx = torch.zeros(batch_size, self.rnn_dim)
-
-  def reset_states(self):
-    self.hx, self.cx = None, None
+  def zero_states(self):
+    self.hx = torch.zeros(1, self.rnn_dim).to(self.device)
+    self.cx = torch.zeros(1, self.rnn_dim).to(self.device)
 
   def detach_states(self):
     if not hasattr(self, 'hx'):
@@ -143,25 +149,29 @@ class Sampler(BaseModule):
     else:
       encoder_loss = 0
     # preprocess [value, mean, skew, kurt]
-    loss = self.preprocess(encoded.loss, encoded.labels)
-    acc = self.preprocess(encoded.acc.float(), encoded.labels)
-    dist = self.preprocess(encoded.dist.mean(1), encoded.labels)
+    loss, loss_ = self.preprocess(encoded.loss, encoded.labels)
+    acc, acc_ = self.preprocess(encoded.acc.float(), encoded.labels)
+    dist, dist_ = self.preprocess(encoded.dist.mean(1), encoded.labels)
     # concatenat preprocessed tensors [loss, acc, dist]
-    x = torch.cat([loss, acc, dist], dim=1).detach()
-    #   [n_class, input_dim]
-    # create states at the frist step
-    if self.hx is None:
-      assert self.cx is None
-      self.zero_states(x.size(0))
-    # unroll one step
-    x = self.input_linear(x)
-    self.hx, self.cx = self.lstm(x, (self.hx, self.cx))
+    x_classwise = torch.cat([loss, acc, dist], dim=1).detach()
+    x_global = torch.cat([loss_, acc_, dist_], dim=0).detach()
+    # classwise: [n_class, input_dim] / global: [input_dim]
+
+    # classwise linear
+    x_classwise = self.classwise_linear(x_classwise)
+    # global linear + rnn
+    x_global = self.global_linear(x_global.unsqueeze(0))
+    self.hx, self.cx = self.lstm(x_global, (self.hx, self.cx))
+    x_global = self.hx
+    # merge classwise + global
+    x_merged = x_classwise + x_global
+
     # action
-    logits = self.actor_linear(self.hx)
+    logits = self.actor_linear(x_merged)
     probs = F.softmax(logits, dim=1)
     action = Action(probs)
     # value
-    value = self.critic_linear(self.hx)
+    value = self.critic_linear(x_merged)
     return action, value, encoder_loss
 
   def save(self, save_path=None):

@@ -45,7 +45,7 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
   assert mode in ['train', 'valid', 'test']
   train = True if mode == 'train' else False
   gpu_id = cfg.args.gpu_ids[rank % len(cfg.args.gpu_ids)]
-  device = 'cpu' if gpu_id != -1 else f'cuda:{gpu_id}'
+  device = 'cpu' if gpu_id == -1 else f'cuda:{gpu_id}'
   ptitle(f'RL-Evironment|MODE:{mode}|RANK:{rank}|GPU_ID:{device}')
   C.set_cuda(gpu_id >= 0)
   torch.cuda.set_device(gpu_id)
@@ -56,14 +56,14 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
     loader_cfg = LoaderConfig(
         class_size=cfg.loader.class_size,
         sample_size=cfg.loader.sample_size,
-        num_workers=0,
+        num_workers=1,
     ).to(device)
   else:
     # typical uniform sampling
     #   (at least 2 samples per class)
     loader_cfg = LoaderConfig(
         batch_size=cfg.loader.batch_size,
-        num_workers=0,
+        num_workers=1,
     ).to(device)
 
   # agent
@@ -94,6 +94,8 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
   state = env.reset()
 
   for outer_step, inner_step in m:
+    if not train:
+      print(f'outer: {outer_step}, inner: {inner_step}')
     if m.start_of_episode() or m.start_of_unroll():
       # copy from shared memory
       sampler.copy_state_from(shared_sampler)
@@ -107,7 +109,6 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
     values.append(value)
     rewards.append(reward)
     ############################################################################
-
     if not (m.end_of_unroll() or m.end_of_episode()):
       continue  # keep stacking action/value/reward
 
@@ -138,12 +139,18 @@ def loop(mode, cfg, rank, done, metadata, shared_sampler=None,
 
     # update global sampler
     sampler.zero_grad()
-    (policy_loss + value_loss + encoder_loss).backward()
+    total_loss = policy_loss + value_loss + encoder_loss
+    total_loss.backward()
     sampler.copy_grad_to(shared_sampler)
     shared_optim.step()
     # detach
     sampler.detach_states()
+    # log
+    if not train:
+      print(f'[Loss] {policy_loss} | {value_loss} | {encoder_loss}')
+      print(f'[Reward] {reward}')
 
     if m.end_of_episode():
       state = env.reset()
+      sampler.zero_states()
   return None

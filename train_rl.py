@@ -40,6 +40,7 @@ parser.add_argument('--gpu_ids', type=int, default=[-1], nargs='+',
                     help='GPU to use. (use CPU if -1)')
 parser.add_argument('--gpu_all', action='store_true',
                     help='Use all the GPUs currently available.')
+parser.add_argument('--debug', action='store_true', help='debug mode on')
 
 
 def meta_train(cfg):

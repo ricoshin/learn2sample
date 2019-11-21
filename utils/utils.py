@@ -111,9 +111,15 @@ def prepare_config_and_dirs(args: argparse.Namespace):
     cfg = DotMap(yaml.safe_load(f))
   cfg.args = DotMap(vars(args))
   # postprocess configs
-  if cfg.args.gpu_all:
+  if cfg.args.workers < 2:
+    print('Warning: You need at least 2 workers for a train-valid pair.')
+  if cfg.args.gpu_all and not cfg.args.debug:
     assert len(cfg.args.gpu_ids) <= torch.cuda.device_count()
     cfg.args.gpu_ids = list(range(torch.cuda.device_count()))
+  if cfg.args.debug:
+    print('Debugging mode: single worker / volatile mode on.')
+    cfg.args.workers = 1
+    cfg.args.volatile = True
   # prepare directories if needed
   if not cfg.args.volatile:
     save_dir = os.path.join(cfg.dirs.result, cfg.args.config)

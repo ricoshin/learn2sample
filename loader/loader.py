@@ -125,7 +125,7 @@ class LoaderConfig(object):
     self.device = 'cpu'
 
   def to(self, device):
-    self.divice = device
+    self.device = device
     return self
 
   def _stack_batch(self, batch):
