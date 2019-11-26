@@ -41,6 +41,7 @@ class Model(BaseModule):
     self.n_classes = n_classes
     self.input_dim = input_dim
     self._embed_dim = None
+    self.auto_reset = auto_reset
     self.preprocess = preprocess
     if auto_reset:
       self.reset()
@@ -59,10 +60,11 @@ class Model(BaseModule):
   #   return self._embed_dim
 
   def new(self):
-    # deepcopy?
+    # deepcopy + reset?
     return Model(self.input_dim, self.embed_dim, self.channels, self.kernels,
                  self.distance_type, self.last_layer, self.optim_getter,
-                 self.n_classes).to(self.device)
+                 self.n_classes, self.auto_reset, self.preprocess).to(
+                  self.device)
 
   def copy_state_from(self, sampler_src):
     self.load_state_dict(sampler_src.state_dict())

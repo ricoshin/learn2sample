@@ -91,7 +91,7 @@ class Dataset(object):
     return iter([self.imgs, self.labels, self.ids])
 
   def __getitem__(self, key):
-    """instacne indexing"""
+    """instance indexing"""
     imgs = self.imgs[key].view(-1)
     ids = self.ids[key].view(-1)
     labels = new_labels(ids)
@@ -131,10 +131,10 @@ class Dataset(object):
       return x.view(self.n_classes * self.n_samples, *rest_dims)
     return view_elementwise_fn
 
-  def to(self, device=None):
-    imgs = self.imgs.to(device)
-    labels = self.labels.to(device)
-    ids = self.ids.to(device)
+  def to(self, device, non_blocking=False):
+    imgs = self.imgs.to(device=device, non_blocking=non_blocking)
+    labels = self.labels.to(device=device, non_blocking=non_blocking)
+    ids = self.ids.to(device=device, non_blocking=non_blocking)
     return Dataset(imgs, labels, ids, self.name)
 
   def cuda(self, device=None):
@@ -330,9 +330,9 @@ class Episode(object):
     return Episode(*[set.offset_indices(offset_labels, offset_ids)
                      for set in self], self.n_total_classes)
 
-  def to(self, device=None):
-    s = self.s.to(device)
-    q = self.q.to(device)
+  def to(self, device, non_blocking=False):
+    s = self.s.to(device=device, non_blocking=non_blocking)
+    q = self.q.to(device=device, non_blocking=non_blocking)
     return Episode(s, q, self.n_total_classes, self.name)
 
   def cuda(self, device=None):

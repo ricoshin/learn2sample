@@ -60,11 +60,13 @@ class Action(object):
     probs = self.m.probs
     log_probs = self.m.log_prob(instance)
     entropy = self.m.entropy()
+    sparsity = (instance == 1.).sum().float() / len(instance)
     return DotMap(dict(
         instance=instance,
         probs=probs,
         log_probs=log_probs,
         entropy=entropy,
+        sparsity=sparsity,
     ))
 
 
@@ -171,7 +173,7 @@ class Sampler(BaseModule):
     probs = F.softmax(logits, dim=1)
     action = Action(probs)
     # value
-    value = self.critic_linear(x_merged)
+    value = self.critic_linear(x_global).squeeze()
     return action, value, encoder_loss
 
   def save(self, save_path=None):
@@ -194,21 +196,16 @@ class Sampler(BaseModule):
     return model
 
   def new(self):
-    return Sampler(self.embed_dim, self.rnn_dim, self.mask_unit, self.encoder)
+    return Sampler(
+      self.embed_dim, self.rnn_dim, self.mask_unit, self.encoder.new())
 
-  def copy_state_from(self, sampler_src):
+  def copy_state_from(self, sampler_src, non_blocking=False):
     self.load_state_dict(sampler_src.state_dict())
-    self.to(self.device)
+    self.to(self.device, non_blocking=non_blocking)
 
   def copy_grad_to(self, sampler_tar):
-    cpu = self.device == torch.device('cpu')
-    for tar, src in zip(sampler_tar.parameters(), self.paramters()):
-      if tar is not None and cpu:
-        return
-      elif cpu:
-        tar._grad = src.grad
-      else:
-        tar._grad = src.grad.cpu()
+    for tar, src in zip(sampler_tar.parameters(), self.parameters()):
+      tar._grad = src.grad.to(tar.device)
 
   def cuda_parallel_(self, dict_, parallel):
     if parallel:

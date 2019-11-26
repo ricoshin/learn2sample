@@ -9,12 +9,12 @@ steps:
     unroll: 20
   outer:
     max: 10000
-    anneal: 50  # 0 = no annealing
+    anneal: 0  # 0 = no annealing
 
 loader:
   input_dim: [3, 84, 84]
   class_balanced: False
-  split_method: inclusive  # inclusive / exclusive
+  split_method: exclusive  # inclusive / exclusive
   class_size: 10
   sample_size: 3
   batch_size: 128

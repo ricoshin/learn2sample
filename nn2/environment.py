@@ -1,4 +1,5 @@
 import copy
+import random
 
 import torch
 from loader.metadata import Metadata
@@ -33,10 +34,10 @@ class Environment(object):
     self.n_episode = -1
     self.device = 'cpu'
 
-  def to(self, device):
+  def to(self, device, non_blocking=False):
     self.device = device
-    self.model = self.model.to(device)
-    self.base_model = self.base_model.to(device)
+    self.model = self.model.to(device, non_blocking=non_blocking)
+    self.base_model = self.base_model.to(device, non_blocking=non_blocking)
     return self
 
   def reset(self):
@@ -50,6 +51,13 @@ class Environment(object):
     self.meta_q = self.meta_q_loader()
     # utils.ForkablePdb().set_trace()
     return self(action=None)[0]  # return state only
+
+  def get_random_action(self, action_instance, sparsity):
+    n_ones = int(len(action_instance) * sparsity)
+    n_zeros = len(action_instance) - n_ones
+    random_action = [0] * n_zeros + [1] * n_ones
+    random.shuffle(random_action)
+    return torch.tensor(random_action).to(action_instance.device)
 
   def __call__(self, action=None, loop_manager=None):
     """Simulate one action and return reward and next state.
@@ -66,21 +74,32 @@ class Environment(object):
     if action is not None:
       # instance/class selection
       if self.mask_unit == 'instance':
-        mata_s = self.mata_s.masked_select(action)
+        mata_s = self.mata_s.masked_select(action.instance)
       elif self.mask_unit == 'class':
-        meta_s = self.meta_s.classwise.masked_select(action)
+        meta_s = self.meta_s.classwise.masked_select(action.instance)
+        action_random = self.get_random_action(
+          action.instance, action.sparsity)
+        meta_s_base = self.meta_s.classwise.masked_select(action_random)
+
     else:
       # when no action is provided
       meta_s = self.meta_s
+      meta_s_base = self.meta_s
 
     # train (model)
-    out_s = self.model(data=meta_s)
+    try:
+      out_s = self.model(data=meta_s)
+    except:
+      utils.ForkablePdb().set_trace()
     self.model.zero_grad()
     out_s.loss.mean().backward()
     self.model.optim.step()
 
     # train (baseline)
-    out_s_base = self.base_model(data=self.meta_s)
+    try:
+      out_s_base = self.base_model(data=meta_s_base)
+    except:
+      utils.ForkablePdb().set_trace()
     self.base_model.zero_grad()
     out_s_base.loss.mean().backward()
     self.base_model.optim.step()
@@ -105,13 +124,22 @@ class Environment(object):
     reward = torch.tensor([0.]).to(self.device)
     #   long horizon penalty
     reward -= 0.1
+    # print(f'{loop_manager and loop_manager.end_of_unroll()}')
     if loop_manager and loop_manager.end_of_unroll():
       #   performance gain reward
-      acc_gain = out_s_base.acc - out_s.acc
+      acc = out_s_base.acc.float().mean()
+      acc_base = out_s.acc.float().mean()
+      acc_gain = acc - acc_base
+      print(f'[acc_gain] {acc_gain}')
+      # sparsity = (action == 1.0).sum().float() / len(action)
+      print(f'[sparsity] {action.sparsity}')
       reward += acc_gain
-      if acc_diff >= 0:
+      if acc_gain >= - 0.005:
         # sparsity reward (only when performance does NOT hurt)
-        reward += 1 - (sum(action == 1.0) / len(action))**2
+        try:
+          reward += 1 - action.sparsity**2
+        except:
+          utils.ForkablePdb().set_trace()
       # synchoronize baseline with model
       self.base_model.copy_state_from(self.model)
 

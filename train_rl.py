@@ -115,6 +115,7 @@ def meta_train(cfg):
               done=done,
               metadata=meta_valid,
               shared_sampler=shared_sampler,
+              shared_optim=shared_optim,
           ))
     # import pdb; pdb.set_trace()
     p.start()

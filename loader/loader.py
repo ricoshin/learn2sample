@@ -123,9 +123,11 @@ class LoaderConfig(object):
     self.class_size = class_size
     self.sample_size = sample_size
     self.device = 'cpu'
+    self.non_blocking = False
 
-  def to(self, device):
+  def to(self, device, non_blocking=False):
     self.device = device
+    self.non_blocking = non_blocking
     return self
 
   def _stack_batch(self, batch):
@@ -176,7 +178,8 @@ class LoaderConfig(object):
         pin_memory=self.pin_memory,
     ))
     def loader():
-      return Dataset(*_loader.next(), name).to(self.device)
+      return Dataset(*_loader.next(), name).to(
+        device=self.device, non_blocking=self.non_blocking)
     return loader
 
   def get_episode_loader(self, metadata, name):
@@ -192,5 +195,6 @@ class LoaderConfig(object):
       s = Dataset(*_loader.next(), 'Support')
       q = Dataset(*_loader.next(), 'Query')
       # import pdb; pdb.set_trace()
-      return Episode(s, q, len(s.classwise), name).to(self.device)
+      return Episode(s, q, len(s.classwise), name).to(
+        device=self.device, non_blocking=self.non_blocking)
     return loader
