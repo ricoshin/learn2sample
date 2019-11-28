@@ -2,6 +2,7 @@ import copy
 import random
 
 import torch
+from dotmap import DotMap
 from loader.metadata import Metadata
 from nn2.model import Model
 from utils import utils
@@ -30,8 +31,8 @@ class Environment(object):
     self.data_split_method = data_split_method
     self.mask_unit = mask_unit
     # split meta-support and meta-query set
-    self.meta_s, self.meta_q = metadata.split(data_split_method)
-    self.n_episode = -1
+    self.meta_sup, self.meta_que = metadata.split(data_split_method)
+    self.meta_sup, self.meta_que = metadata.split(data_split_method)
     self.device = 'cpu'
 
   def to(self, device, non_blocking=False):
@@ -43,12 +44,12 @@ class Environment(object):
   def reset(self):
     """Reset environment(the dataloaders and the model).
     """
-    self.meta_s_loader = self.meta_s.episode_loader(self.loader_cfg)
-    self.meta_q_loader = self.meta_q.episode_loader(self.loader_cfg)
+    self.meta_s_loader = self.meta_sup.episode_loader(self.loader_cfg)
+    self.meta_q_loader = self.meta_que.episode_loader(self.loader_cfg)
     self.model.reset()
     self.base_model.copy_state_from(self.model)
     self.meta_s = self.meta_s_loader()
-    self.meta_q = self.meta_q_loader()
+    # self.meta_q = self.meta_q_loader()
     # utils.ForkablePdb().set_trace()
     return self(action=None)[0]  # return state only
 
@@ -69,78 +70,91 @@ class Environment(object):
     if not hasattr(self, 'meta_s_loader'):
       raise RuntimeError('Do .reset() first before running .step().')
 
-    self.n_episode += 1
-
     if action is not None:
+      # sample mask
+      n_iter = 0
+      max_iter = 1000
+      while True:
+        n_iter += 1
+        if n_iter >= max_iter:
+          print('Resampling number exceeded maximum iteration!')
+        mask = action.probs.multinomial(1).data
+        if mask.sum() > 0:
+          break
+      # create baseline mask
+      mask_base = torch.ones(mask.size())  # all-one base
       # instance/class selection
       if self.mask_unit == 'instance':
-        mata_s = self.mata_s.masked_select(action.instance)
+        mata_s = self.mata_s.masked_select(mask)
+        # TODO: instance mask has not implemented yet
       elif self.mask_unit == 'class':
-        meta_s = self.meta_s.classwise.masked_select(action.instance)
-        action_random = self.get_random_action(
-          action.instance, action.sparsity)
-        meta_s_base = self.meta_s.classwise.masked_select(action_random)
-
+        meta_s = self.meta_s.classwise.masked_select(mask)
+        # action_mask = self.get_random_action(
+        #   mask, 0.5 + (100 - loop_manager.outer_step) / 200)
+        # meta_s_base = self.meta_s.classwise.masked_select(action_mask)
+        meta_s_base = self.meta_s.classwise.masked_select(mask_base)
     else:
       # when no action is provided
       meta_s = self.meta_s
       meta_s_base = self.meta_s
 
-    # train (model)
-    try:
-      out_s = self.model(data=meta_s)
-    except:
-      utils.ForkablePdb().set_trace()
-    self.model.zero_grad()
-    out_s.loss.mean().backward()
-    self.model.optim.step()
+    with torch.enable_grad():
+      # train (model)
+      if meta_s is None:
+        # when all-zero mask
+        utils.ForkablePdb().set_trace()
+      state = self.model(data=meta_s)
+      # utils.ForkablePdb().set_trace()
+      self.model.zero_grad()
+      state.loss.mean().backward()
+      self.model.optim.step()
 
-    # train (baseline)
-    try:
-      out_s_base = self.base_model(data=meta_s_base)
-    except:
-      utils.ForkablePdb().set_trace()
-    self.base_model.zero_grad()
-    out_s_base.loss.mean().backward()
-    self.base_model.optim.step()
+      # train (baseline)
+      #   baseline has to be used just for reward generation,
+      #   not for state generation as we don't want to keep it at test time.
+      state_base = self.base_model(data=meta_s_base)
+      self.base_model.zero_grad()
+      state_base.loss.mean().backward()
+      self.base_model.optim.step()
 
-    # test (model & baseline)
-    with torch.no_grad():
-      out_q = self.model(data=self.meta_q)
-      out_q_base = self.base_model(data=self.meta_q)
-
-    # input for next step
+    # state (one-step-ahead input for sampler)
     self.meta_s = self.meta_s_loader()
-    self.meta_q = self.meta_q_loader()
-
-    # state
-    state = out_q
-    #   incorporate next data into the state
-    #     for the sampler that has its own encoder.
     state.meta_s = self.meta_s
-    state.meta_q = self.meta_q
+    # embedding for target of MSE loss
+    embed = state_base.embed
 
-    # reward
+    if action is None:
+      return state, None, None, None
+
+    # horizon & sparsity reward (dense)
     reward = torch.tensor([0.]).to(self.device)
-    #   long horizon penalty
-    reward -= 0.1
-    # print(f'{loop_manager and loop_manager.end_of_unroll()}')
+    reward -= 0.1  # long horizon penalty
+    sparsity = (mask == 1.).sum().float() / len(mask)
+    sparsity_base = (mask_base == 1.).sum().float() / len(mask_base)
+    state.sparsity = sparsity
+    state_base.sparsity = sparsity_base
+    reward += (1 - sparsity**2) * 0.1  # sparsity reward
+
+    info = DotMap(dict(base=state_base, acc_gain=None))
+
+    # at each end of unrolling
     if loop_manager and loop_manager.end_of_unroll():
-      #   performance gain reward
-      acc = out_s_base.acc.float().mean()
-      acc_base = out_s.acc.float().mean()
+      acc = []
+      acc_base = []
+      with torch.no_grad():
+        # test (model & baseline)
+        for _ in range(10):  # TODO: as cfg
+          meta_q = self.meta_q_loader()
+          acc.append(self.model(data=meta_q).acc.float().mean())
+          acc_base.append(self.base_model(data=meta_q).acc.float().mean())
+      # performance gain reward (sparse)
+      acc = sum(acc) / len(acc)
+      acc_base = sum(acc_base) / len(acc_base)
       acc_gain = acc - acc_base
-      print(f'[acc_gain] {acc_gain}')
-      # sparsity = (action == 1.0).sum().float() / len(action)
-      print(f'[sparsity] {action.sparsity}')
-      reward += acc_gain
-      if acc_gain >= - 0.005:
-        # sparsity reward (only when performance does NOT hurt)
-        try:
-          reward += 1 - action.sparsity**2
-        except:
-          utils.ForkablePdb().set_trace()
+      info.acc_gain = acc_gain  # update acc_gain
+      reward += acc_gain * 100
       # synchoronize baseline with model
       self.base_model.copy_state_from(self.model)
 
-    return state, reward.detach()
+    reward = reward.squeeze().detach()
+    return state, reward, info, embed

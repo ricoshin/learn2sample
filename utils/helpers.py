@@ -1,3 +1,6 @@
+import math
+import time
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -106,11 +109,17 @@ class InnerStepScheduler():
 
 
 class LoopMananger():
-  def __init__(self, done, steps):
+  def __init__(self, train, rank, ready, ready_step, done, steps):
+    self.train = train  # boolean
+    self.rank = rank
+    self.ready = ready
+    self.ready_step = ready_step
     self.done = done
-    self.inner_steps = steps.inner.max
     self.outer_steps = steps.outer.max
+    self.inner_steps = steps.inner.max
     self.unroll_steps = steps.inner.unroll
+    self.log_steps = steps.inner.log
+    self.n_trunc = math.ceil(self.inner_steps / self.unroll_steps)
     # utils.ForkablePdb().set_trace()
     self.inner_scheduler = InnerStepScheduler(
         outer_steps=steps.outer.max,
@@ -121,10 +130,16 @@ class LoopMananger():
     self.outer_step = 0
 
   def __iter__(self):
-    for i in range(1, self.outer_steps):
-      for j in range(1, self.inner_scheduler(i)):
+    for i in range(1, self.outer_steps + 1):
+      for j in range(1, self.inner_scheduler(i) + 1):
+        if (self.train and self.ready[self.rank] is False and
+            j == self.ready_step):
+          self.ready[self.rank] = True  # get ready!
+          while not all(self.ready):
+            time.sleep(1)  # wait for other agents to stand-by
+            continue
         if self.done.value:
-          break
+          break  #  stop all the agents when valid agent says so
         self.outer_step = i
         self.inner_step = j
         yield i, j
@@ -140,6 +155,9 @@ class LoopMananger():
 
   def end_of_episode(self):
     return self.inner_step == self.inner_steps
+
+  def log_step(self):
+    return self.inner_step % self.log_steps == 0
 
 
 class Logger():

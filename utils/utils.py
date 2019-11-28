@@ -138,8 +138,10 @@ def prepare_config_and_dirs(args: argparse.Namespace):
     shutil.copytree(os.path.abspath(os.path.curdir), code_path,
                     ignore=lambda src, names: {'.git', '__pycahe__', 'result'})
     # add more dirs
-    cfg.dirs.save = save_dir
-    cfg.dirs.save_image = 'image'
+    cfg.dirs.save = DotMap(dict(
+        tfrecord=os.path.join(save_dir, 'tfrecord')),
+        image=os.path.join(save_dir, 'image'),
+    )
   return cfg
 
 
@@ -227,7 +229,7 @@ class CUDAManager(object):
   def set_cuda(self, cuda, manual_seed=None):
     assert isinstance(cuda, bool)
     self.cuda = cuda
-    print(f"Global cuda manager '{self.name}' is set to {self.cuda}.")
+    # print(f"Global cuda manager '{self.name}' is set to {self.cuda}.")
     if cuda and manual_seed:
       torch.cuda.manual_seed(manual_seed)
       torch.backends.cudnn.deterministic = True

@@ -108,7 +108,7 @@ class Model(BaseModule):
     layers.apply(weights_init)
     return layers
 
-  def forward(self, data, debug=False):
+  def forward(self, data, use_fc=False, debug=False):
     """
     Args:
       data (loader.Dataset or loader.Episode):
@@ -122,6 +122,9 @@ class Model(BaseModule):
     """
     if not hasattr(self, 'layers'):
       raise RuntimeError('Do .reset() first!')
+
+    if use_fc and self.last_layer == 'metric':
+      raise Exception("Can't use fc layer when Model.layer_layer == 'metric'.")
 
     # images and labels
     if isinstance(data, Dataset):
@@ -153,14 +156,12 @@ class Model(BaseModule):
         labels=data.q.labels,
     )
 
-    if self.last_layer == 'fc':
+    if use_fc:
       # fix later
       logits = x.view(x.size(0), self.n_classes)
     elif self.last_layer == 'metric':
       logits = dist
       y = data.q.labels
-    else:
-      raise Exception(f'Unknown last_layer: {self.last_layer}')
 
     try:
       loss = F.cross_entropy(logits, y, reduction='none')

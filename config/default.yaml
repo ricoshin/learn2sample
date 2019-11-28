@@ -6,21 +6,22 @@ dirs:
 steps:
   inner:
     max: 500
-    unroll: 20
+    unroll: 100
+    log: 20
   outer:
     max: 10000
     anneal: 0  # 0 = no annealing
 
 loader:
   input_dim: [3, 84, 84]
-  class_balanced: False
-  split_method: exclusive  # inclusive / exclusive
+  class_balanced: True
+  split_method: inclusive  # inclusive / exclusive
   class_size: 10
-  sample_size: 3
+  sample_size: 5
   batch_size: 128
 
 model:
-  lr: 0.01
+  lr: 0.0001
   optim: sgd
   embed_dim: 500
   channels: [64, 64, 64, 64]
@@ -29,15 +30,17 @@ model:
   distance_type: cosine  # euclidean / cosine
 
 sampler:
-  lr: 0.001
+  lr: 0.0001
+  grad_norm: 40
+  rnn_dim: 500
   optim: adam  # adam / rmsprop
-  rnn_dim: 256
   mask_unit: class  # sample / class
   input_more: True
   output_more: True
   temp: 1.0
   encoder:
     reuse_model: False
+    lr: 0.01
     channels: [64, 64]
     kernels: [3, 3]
 

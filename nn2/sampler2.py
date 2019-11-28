@@ -44,7 +44,10 @@ class MaskMode(object):
 
 
 class Action(object):
-  def __init__(self, probs):
+  def __init__(self, logits):
+    import pdb; pdb.set_trace()
+    prob = F.softmax(logits, dim=1)
+    log_prob = F.log_softmax(logits, dim=1)
     self.m = Categorical(probs)
 
   @property
@@ -56,11 +59,21 @@ class Action(object):
     return self.m.probs()
 
   def sample(self):
-    instance = self.m.sample()
-    probs = self.m.probs
-    log_probs = self.m.log_prob(instance)
-    entropy = self.m.entropy()
-    sparsity = (instance == 1.).sum().float() / len(instance)
+    max_resample = 1000
+    n_resample = 0
+    while True:
+      instance = self.m.sample()
+      probs = self.m.probs
+      log_probs = self.m.log_prob(instance)
+      entropy = self.m.entropy()
+      sparsity = (instance == 1.).sum().float() / len(instance)
+      if sparsity == 0:
+        n_resample += 1
+        if n_resample >= max_resample:
+          print('Max resampling number exceeded! Make random mask.')
+        continue
+      else:
+        break
     return DotMap(dict(
         instance=instance,
         probs=probs,
@@ -147,9 +160,12 @@ class Sampler(BaseModule):
     # encoder
     if self.encoder is not None:
       encoded = self.encoder(state.meta_s)
-      encoder_loss = F.mse_loss(encoded.embed, state.embed.detach())
+      embed = encoded.embed
+      # encoder_loss = F.mse_loss(encoded.embed, state.embed.detach())
     else:
-      encoder_loss = 0
+      embed = None
+      # TODO: encoded=? when self.encoder is None
+
     # preprocess [value, mean, skew, kurt]
     loss, loss_ = self.preprocess(encoded.loss, encoded.labels)
     acc, acc_ = self.preprocess(encoded.acc.float(), encoded.labels)
@@ -171,10 +187,13 @@ class Sampler(BaseModule):
     # action
     logits = self.actor_linear(x_merged)
     probs = F.softmax(logits, dim=1)
-    action = Action(probs)
+    log_probs = F.log_softmax(logits, dim=1)
+    entropy= -(log_probs * probs).sum(1)
+    action = DotMap(dict(probs=probs, log_probs=log_probs, entropy=entropy))
+
     # value
     value = self.critic_linear(x_global).squeeze()
-    return action, value, encoder_loss
+    return action, value, embed
 
   def save(self, save_path=None):
     if save_path:
@@ -206,6 +225,14 @@ class Sampler(BaseModule):
   def copy_grad_to(self, sampler_tar):
     for tar, src in zip(sampler_tar.parameters(), self.parameters()):
       tar._grad = src.grad.to(tar.device)
+
+  def encoder_params(self):
+    if self.encoder is None:
+      raise RuntimeError('Sampler does NOT have encoder!')
+    return self.encoder.parameters()
+
+  def non_encoder_params(self):
+    return iter([p for n, p in self.named_parameters() if 'encoder' in n])
 
   def cuda_parallel_(self, dict_, parallel):
     if parallel:

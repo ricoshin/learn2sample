@@ -76,7 +76,13 @@ def meta_train(cfg):
 
   print('Loading a shared optimizer..')
   getter = OptimGetter(cfg.sampler.optim, lr=cfg.sampler.lr, shared=True)
-  shared_optim = getter(shared_sampler.parameters())
+  if cfg.sampler.encoder.reuse_model:
+    params = [{'params': shared_sampler.encoder_params()},
+              {'params': shared_sampler.non_encoder_params(),
+               'lr': cfg.sampler.encoder.lr}]
+  else:
+    params = shared_sampler.parameters()
+  shared_optim = getter(params)
   shared_optim.share_memory()
   #####################################################################
 
@@ -85,10 +91,17 @@ def meta_train(cfg):
 
   if not (len(cfg.args.gpu_ids) == 1 and cfg.args.gpu_ids[0] == -1):
     mp.set_start_method('spawn')  # just for GPUs
+  ready = mp.Array(c_bool, [False] * (cfg.args.workers - 1))
   done = mp.Value(c_bool, False)
   print(f'Starting {cfg.args.workers} processes '
         f'with GPU ids={cfg.args.gpu_ids}')
   processes = []
+  if cfg.args.workers == 1:
+    trunc_size = cfg.steps.inner.max
+  else:
+    trunc_size = cfg.steps.inner.max // (cfg.args.workers - 1)
+  # Fix later: consider scheduler!
+  ready_step = range(0, cfg.steps.inner.max, trunc_size)
   for rank in tqdm(range(0, cfg.args.workers)):
     # import pdb; pdb.set_trace()
     if rank < cfg.args.workers - 1:
@@ -99,10 +112,12 @@ def meta_train(cfg):
               mode='train',
               cfg=cfg,
               rank=rank,
+              ready=ready,
               done=done,
               metadata=meta_train,
               shared_sampler=shared_sampler,
               shared_optim=shared_optim,
+              ready_step=ready_step[rank] + 1,
           ))
     else:
       # validation process (single)
@@ -112,6 +127,7 @@ def meta_train(cfg):
               mode='valid',
               cfg=cfg,
               rank=rank,
+              ready=ready,
               done=done,
               metadata=meta_valid,
               shared_sampler=shared_sampler,
