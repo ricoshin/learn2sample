@@ -108,14 +108,13 @@ class BalancedBatchSampler(data.Sampler):
 
 class LoaderConfig(object):
   def __init__(self, batch_size=None, class_size=None, sample_size=None,
-               class_balanced=False, relabel_in_batch=True, sort_in_batch=True,
-               num_workers=2, pin_memory=False, gpu_id='cpu'):
-    """batch_size and (class_size, sample_size) are exclusive."""
+               class_balanced=False, sort_in_batch=True, num_workers=2,
+               pin_memory=False, gpu_id='cpu'):
+    """(batch_size) and (class_size, sample_size) are exclusive."""
     if batch_size is None:
       assert (class_size is not None) and (sample_size is not None)
     else:
       assert (class_size is None) and (sample_size is None)
-    self.relabel_in_batch = relabel_in_batch
     self.sort_in_batch = sort_in_batch
     self.num_workers = num_workers
     self.pin_memory = pin_memory
@@ -144,9 +143,6 @@ class LoaderConfig(object):
     if self.sort_in_batch:
       # sort elements in batch by relative class labels
       batch = sorted(batch, key=lambda batch: batch[1])
-    if self.relabel_in_batch:
-      to_new_idx = {s: i for i, s in enumerate(set([b[1] for b in batch]))}
-      batch = [[b[0], to_new_idx[b[1]], b[2]] for b in batch]
     imgs = self._stack_batch([b[0] for b in batch])
     labels = self._stack_batch([torch.tensor(b[1]) for b in batch])
     ids = self._stack_batch([torch.tensor(b[2]) for b in batch])

@@ -2,7 +2,7 @@ import os
 import pdb
 import random
 import sys
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Iterable
 
 import gin
@@ -11,14 +11,6 @@ import numpy as np
 import tensorflow as tf
 import torch
 from utils import utils
-
-
-def new_labels(ids):
-  """re-number class labels."""
-  ids, device = ids.tolist(), ids.device
-  id_to_label = {id: label for label, id in enumerate(set(ids))}
-  out = torch.tensor([id_to_label[id] for id in ids]).to(device)
-  return out
 
 
 class DatasetClassIndexer(object):
@@ -51,7 +43,7 @@ class DatasetClassIndexer(object):
       mask += self.dataset.labels == id
     imgs = self.dataset.imgs[mask]
     ids = self.dataset.ids[mask]
-    labels = new_labels(ids)
+    labels = self.dataset.labels[mask]
     return Dataset(imgs, labels, ids, self.dataset.name)
 
   def masked_select(self, mask):
@@ -66,7 +58,7 @@ class DatasetClassIndexer(object):
 
 class Dataset(object):
   """Dataset class that should contain images, labels, and ids.
-  Support set or query set can be a proper candidate of Dataset."""
+  Support and query set are proper candidates of Dataset."""
 
   def __init__(self, imgs, labels, ids, name):
     assert all([isinstance(t, torch.Tensor) for t in [imgs, labels, ids]])
@@ -79,6 +71,15 @@ class Dataset(object):
     self.n_samples = {i: n for i, n in sorted(class_counter.items())}
     self.n_classes = len(self.n_samples.keys())
     self.classwise = DatasetClassIndexer(self)  # support classwise operation
+
+  @property
+  def in_labels(self):
+    """re-numbered labels in the current set for prototypical network."""
+    ids, device = self.ids.tolist(), self.ids.device
+    ids_set = list(OrderedDict.fromkeys(ids).keys())  # order-preserved set
+    id_to_label = {id: label for label, id in enumerate(ids_set)}
+    labels_new = torch.tensor([id_to_label[id] for id in ids]).to(device)
+    return labels_new
 
   def __repr__(self):
     return __class__.__name__ + f'(labels={self.labels}, name={self.name})'
@@ -375,8 +376,8 @@ class Episode(object):
       *map(Dataset.concat, zip(*episodes_)), new_n_total_cls, self.name)
 
   @property
-  def concatenated(self):
-    """concatenate support and query. returns loader.episode.Dataset."""
+  def merged(self):
+    """merge support and query. returns loader.episode.Dataset."""
     return self.s.concat([self.s, self.q])
 
 

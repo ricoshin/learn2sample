@@ -9,14 +9,14 @@ import gin
 import torch
 import torch.multiprocessing as mp
 from loader.metadata import ImagenetMetadata
-from loop_rl import loop
+from trainer.train import train
+from trainer.test import test
 from nn2.model import Model
 from nn2.sampler2 import Sampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-
 from utils import utils
-from utils.helpers import Resize, OptimGetter
+from utils.helpers import OptimGetter, Resize
 
 IMAGENET_DIR = '/st1/dataset/learn2sample/imagenet_l2s_84_84'
 DEVKIT_DIR = '/v9/whshin/imagenet/ILSVRC2012_devkit_t12'
@@ -40,10 +40,12 @@ parser.add_argument('--gpu_ids', type=int, default=[-1], nargs='+',
                     help='GPU to use. (use CPU if -1)')
 parser.add_argument('--gpu_all', action='store_true',
                     help='Use all the GPUs currently available.')
-parser.add_argument('--debug', action='store_true', help='debug mode on')
+parser.add_argument('--debug', action='store_true', help='debug mode on.')
+parser.add_argument('--eval_dir', type=str, default='',
+                    help='path to learned parameter for evaluation.')
 
 
-def meta_train(cfg):
+def main(cfg):
   # [ImageNet 1K] meta-train:100 / meta-valid:450 / meta-test:450 (classes)
   meta_data = ImagenetMetadata.load_or_make(
       data_dir=cfg.dirs.imagenet,
@@ -53,7 +55,7 @@ def meta_train(cfg):
   # meta_data, _ = meta_data.split_classes((5, 5))
   # meta_train, meta_valid, meta_test = meta_data.split_classes((1, 2, 2))
   # meta_data, _ = meta_data.split_classes((5, 5))
-  meta_train, meta_valid, meta_test = meta_data.split_classes((3, 3, 4))
+  meta_train, meta_valid, meta_test = meta_data.split_classes((1, 1, 8))
   # import pdb; pdb.set_trace()
 
   print('Loading a shared sampler..')
@@ -62,42 +64,42 @@ def meta_train(cfg):
     encoder = None
   else:
     encoder = Model(
-          input_dim=cfg.loader.input_dim,
-          embed_dim=cfg.model.embed_dim,
-          channels=cfg.sampler.encoder.channels,
-          kernels=cfg.sampler.encoder.kernels,
-          preprocess=Resize(size=32, mode='area'),
-          distance_type=cfg.model.distance_type,
-          auto_reset=True,
-      )
+        input_dim=cfg.loader.input_dim,
+        embed_dim=cfg.model.embed_dim,
+        channels=cfg.sampler.encoder.channels,
+        kernels=cfg.sampler.encoder.kernels,
+        preprocess=Resize(size=32, mode='area'),
+        distance_type=cfg.model.distance_type,
+        auto_reset=True,
+    )
   # sampler
-  shared_sampler = Sampler(
+  sampler = Sampler(
       embed_dim=cfg.model.embed_dim,
       rnn_dim=cfg.sampler.rnn_dim,
       mask_unit=cfg.sampler.mask_unit,
       encoder=encoder,
   )
-  shared_sampler.share_memory()
-
+  if cfg.args.eval_dir:
+    # WARNING: meta_test
+    return test(cfg=cfg, metadata=meta_valid, sampler=sampler)
+  ##############################################################################
   print('Loading a shared optimizer..')
   getter = OptimGetter(cfg.sampler.optim, lr=cfg.sampler.lr, shared=True)
   if cfg.sampler.encoder.reuse_model:
-    params = [{'params': shared_sampler.encoder_params()},
-              {'params': shared_sampler.non_encoder_params(),
+    params = [{'params': sampler.encoder_params()},
+              {'params': sampler.non_encoder_params(),
                'lr': cfg.sampler.encoder.lr}]
   else:
-    params = shared_sampler.parameters()
-  shared_optim = getter(params)
-  shared_optim.share_memory()
-  #####################################################################
+    params = sampler.parameters()
+  optim = getter(params)
 
-  # if args.save_path:
-  #   writer = SummaryWriter(os.path.join(save_path, 'tfevent'))
-
+  sampler.share_memory()
+  optim.share_memory()
+  ##############################################################################
   if not (len(cfg.args.gpu_ids) == 1 and cfg.args.gpu_ids[0] == -1):
     mp.set_start_method('spawn')  # just for GPUs
 
-  if cfg.control.train_only:
+  if cfg.control.no_valid:
     n_train_workers = cfg.args.workers
   else:
     n_train_workers = cfg.args.workers - 1
@@ -107,12 +109,13 @@ def meta_train(cfg):
   else:
     trunc_size = cfg.steps.inner.max // (n_train_workers)
   # Fix later: consider scheduler!
-  ready_step = list(reversed(range(0, cfg.steps.inner.max, trunc_size)))
 
+  # status
+  ready_step = list(reversed(range(0, cfg.steps.inner.max, trunc_size)))
   ready = [False if cfg.control.diverse_start else True]
   ready = mp.Array(c_bool, ready * n_train_workers)
   done = mp.Value(c_bool, False)
-
+  ##############################################################################
   processes = []
   print(f'Starting {cfg.args.workers} processes '
         f'with GPU ids={cfg.args.gpu_ids}')
@@ -121,7 +124,7 @@ def meta_train(cfg):
     if rank < n_train_workers:
       # training processes (multiple)
       p = mp.Process(
-          target=loop,
+          target=train,
           kwargs=dict(
               mode='train',
               cfg=cfg,
@@ -129,14 +132,14 @@ def meta_train(cfg):
               ready=ready,
               done=done,
               metadata=meta_train,
-              shared_sampler=shared_sampler,
-              shared_optim=shared_optim,
+              shared_sampler=sampler,
+              shared_optim=optim,
               ready_step=ready_step[rank] + 1,
           ))
     else:
       # validation process (single)
       p = mp.Process(
-          target=loop,
+          target=train,
           kwargs=dict(
               mode='valid',
               cfg=cfg,
@@ -144,10 +147,10 @@ def meta_train(cfg):
               ready=ready,
               done=done,
               metadata=meta_valid,
-              shared_sampler=shared_sampler,
-              shared_optim=shared_optim,
+              shared_sampler=sampler,
+              shared_optim=optim,
           ))
-    # import pdb; pdb.set_trace()
+    ##############################################################################
     p.start()
     processes.append(p)
     time.sleep(0.1)
@@ -161,7 +164,6 @@ def meta_train(cfg):
 if __name__ == '__main__':
   print('Start_of_program.')
   cfg = utils.prepare_config_and_dirs(parser.parse_args())
-  torch.manual_seed(cfg.args.seed)
-  with torch.autograd.set_detect_anomaly(True):
-    meta_train(cfg)
+  utils.random_seed(cfg.args.seed)
+  main(cfg)
   print('End_of_program.')

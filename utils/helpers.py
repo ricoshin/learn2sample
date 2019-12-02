@@ -109,45 +109,59 @@ class InnerStepScheduler():
 
 
 class LoopMananger():
-  def __init__(self, train, rank, ready, ready_step, done, steps):
+  def __init__(
+    self, train, outer_steps, inner_steps, log_steps, unroll_steps=None,
+    query_steps=None, anneal_steps=None, rank=None, ready=None, ready_step=None,
+    done=None):
+    # TODO: too many None..
     self.train = train  # boolean
+    self.outer_steps = outer_steps
+    self.inner_steps = inner_steps
+    self.log_steps = log_steps
+    self.unroll_steps = unroll_steps
+    self.query_steps = query_steps
+    self.anneal_steps = anneal_steps
     self.rank = rank
     self.ready = ready
     self.ready_step = ready_step
     self.done = done
-    self.outer_steps = steps.outer.max
-    self.inner_steps = steps.inner.max
-    self.unroll_steps = steps.inner.unroll
-    self.log_steps = steps.inner.log
-    self.n_trunc = math.ceil(self.inner_steps / self.unroll_steps)
-    # utils.ForkablePdb().set_trace()
-    self.inner_scheduler = InnerStepScheduler(
-        outer_steps=steps.outer.max,
-        inner_steps=steps.inner.max,
-        anneal_outer_steps=steps.outer.anneal,
-    )
+    if train:
+      self.n_trunc = math.ceil(self.inner_steps / self.unroll_steps)
+      self.inner_scheduler = InnerStepScheduler(
+          outer_steps=self.outer_steps,
+          inner_steps=self.inner_steps,
+          anneal_outer_steps=self.anneal_steps,
+      )
     self.inner_step = 0
     self.outer_step = 0
 
   def __iter__(self):
     for i in range(1, self.outer_steps + 1):
-      for j in range(1, self.inner_scheduler(i) + 1):
+      if self.train:
+        inner_steps = self.inner_scheduler(i)
+      else:
+        inner_steps = self.inner_steps
+      for j in range(1, inner_steps + 1):
         if (self.train and self.ready[self.rank] is False and
             j == self.ready_step):
           self.ready[self.rank] = True  # get ready!
           while not all(self.ready):
             time.sleep(1)  # wait for other agents to stand-by
             continue
-        if self.done.value:
+        if self.train and self.done.value:
           break  #  stop all the agents when valid agent says so
         self.outer_step = i
         self.inner_step = j
         yield i, j
 
   def start_of_unroll(self):
+    if self.unroll_steps is None:
+      return False
     return (self.inner_step - 1) % self.unroll_steps == 0
 
   def end_of_unroll(self):
+    if self.unroll_steps is None:
+      return False
     return self.inner_step % self.unroll_steps == 0
 
   def start_of_episode(self):

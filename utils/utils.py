@@ -25,6 +25,14 @@ from utils import shared_optim
 _tensor_managers = {}
 _cuda_managers = {}
 _debuggers = {}
+_forkable_pdb = None
+
+
+def forkable_pdb():
+  global _forkable_pdb
+  if _forkable_pdb is None:
+    _forkable_pdb = ForkablePdb()
+  return _forkable_pdb
 
 
 def getSignalCatcher(name):
@@ -33,7 +41,7 @@ def getSignalCatcher(name):
   return _debuggers[name]
 
 
-def set_random_seed(seed, deterministic_cudnn=False):
+def random_seed(seed, deterministic_cudnn=False):
   random.seed(seed)
   np.random.seed(seed)
   torch.manual_seed(seed)
@@ -123,25 +131,43 @@ def prepare_config_and_dirs(args: argparse.Namespace):
   # prepare directories if needed
   if not cfg.args.volatile:
     save_dir = os.path.join(cfg.dirs.result, cfg.args.config)
-    if os.path.exists(save_dir):
-      print(f'Directory for saving already exists: {save_dir}')
-      ans = input("Do you want to remove existing dirs and files? [Y/N]")
-      if ans.lower() != 'n':
-        shutil.rmtree(save_dir, ignore_errors=True)
-        print(f'Removed previous dirs and files.')
-    print(f'Made new directory for saving: {save_dir}')
-    # yaml file backup
-    os.makedirs(save_dir)
-    shutil.copy(yaml_path, save_dir)
-    # source code backup
-    code_path = os.path.join(save_dir, 'src')
-    shutil.copytree(os.path.abspath(os.path.curdir), code_path,
-                    ignore=lambda src, names: {'.git', '__pycahe__', 'result'})
+    # if os.path.exists(save_dir):
+    #   print(f'Directory for saving already exists: {save_dir}')
+    #   ans = input("Do you want to remove existing dirs and files? [Y/N]")
+    #   if ans.lower() != 'n':
+    #     shutil.rmtree(save_dir, ignore_errors=True)
+    #     print(f'Removed previous dirs and files.')
+    if cfg.args.eval_dir:
+      save_dir = cfg.args.eval_dir
+      print(f'Evaluation dir will be used for saving as well: {save_dir}')
+    else:
+      save_dir = save_dir + datetime.now().strftime('_%Y%m%d_%H%M%S')
+      print(f'Made new directory for saving: {save_dir}')
+
     # add more dirs
     cfg.dirs.save = DotMap(dict(
-        tfrecord=os.path.join(save_dir, 'tfrecord')),
-        image=os.path.join(save_dir, 'image'),
-    )
+        top=save_dir,
+        tfrecord=os.path.join(save_dir, 'tfrecord'),
+        # plots=os.path.join(save_dir, 'plots'),
+        params=os.path.join(save_dir, 'params'),
+        config=os.path.join(save_dir, 'config'),
+        test=os.path.join(save_dir, 'test'),
+    ))
+
+    if not cfg.args.eval_dir:
+      for dir in cfg.dirs.save.values():
+        if not os.path.exists(dir):
+          os.makedirs(dir)
+      # yaml file backup
+      shutil.copy(yaml_path, cfg.dirs.save.config)
+      # source code backup
+      shutil.copytree(os.path.abspath(os.path.curdir),
+                      os.path.join(save_dir, 'src'),
+                      ignore=lambda src, names:
+                      {'.git', '__pycache__', 'result'})
+
+  if cfg.loader.class_balanced:
+    cfg.loader.batch_size = cfg.loader.class_size * cfg.loader.sample_size
   return cfg
 
 

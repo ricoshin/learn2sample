@@ -368,7 +368,7 @@ class Metadata(object):
     assert method in ['exclusive', 'inclusive']
     if method == 'exclusive':
       if ratio is None:
-        ratio = ('Support', 1), ('Query', 5)  # 1(100) : 4(400)
+        ratio = ('Support', 1), ('Query', 2)  # 1(100) : 4(400)
       meta_support, meta_query = self.split_classes(ratio)
     elif method == 'inclusive':
       if ratio is None:

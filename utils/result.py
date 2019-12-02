@@ -30,7 +30,7 @@ import pickle
 from collections import OrderedDict
 
 import matplotlib
-matplotlib.use('Agg')
+# matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -147,6 +147,15 @@ class ResultFrame(pd.DataFrame):
   def group_min(self, column_name, group_name):
     return self.group_fn('min', group_name, lambda x: x == column_name)
 
+  def get_best(self, name, min_or_max):
+    columns = [col for col in self.columns
+               if '_'.join(col.split('_')[1:]) == name]
+    new_columns = [col.split('_')[0] for col in columns]
+    best = self.groupby(['outer_step'], sort=True)[columns]
+    best = getattr(best, min_or_max)()
+    best.columns = new_columns
+    return ResultFrame(best)
+
   def get_best_loss(self):
     columns = [col for col in self.columns
                if '_'.join(col.split('_')[1:]) == 'q_loss']
@@ -178,6 +187,7 @@ class ResultFrame(pd.DataFrame):
     file_path = os.path.join(save_path, 'plot_' + name + '.png')
     figure.savefig(file_path)
     plt.close(figure)
+    print(f'Saved line plot: {file_path}')
 
   def save_mean_std(self, header, save_path=None):
     msg = ''

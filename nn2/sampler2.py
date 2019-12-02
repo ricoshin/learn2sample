@@ -1,6 +1,7 @@
 import copy
 import math
 import os
+import random
 import sys
 from collections import namedtuple
 from enum import Enum, auto
@@ -45,7 +46,8 @@ class MaskMode(object):
 
 class Action(object):
   def __init__(self, logits):
-    import pdb; pdb.set_trace()
+    import pdb
+    pdb.set_trace()
     prob = F.softmax(logits, dim=1)
     log_prob = F.log_softmax(logits, dim=1)
     self.m = Categorical(probs)
@@ -59,7 +61,7 @@ class Action(object):
     return self.m.probs()
 
   def sample(self):
-    max_resample = 1000
+    max_resample = 10000
     n_resample = 0
     while True:
       instance = self.m.sample()
@@ -99,10 +101,16 @@ class Sampler(BaseModule):
     global_input_dim = 3 * 4
     # rnn + linears
     self.classwise_linear = nn.Linear(classwise_input_dim, rnn_dim)
+    self.classwise_linear2 = nn.Linear(classwise_input_dim, rnn_dim)
+    self.group_linear = nn.Linear(rnn_dim, rnn_dim)
+    self.tanh = nn.Tanh()
     self.global_linear = nn.Linear(global_input_dim, rnn_dim)
-    self.lstm = nn.LSTMCell(rnn_dim, rnn_dim)
+    self.actor_lstm = nn.LSTMCell(rnn_dim, rnn_dim)
+    self.critic_lstm = nn.LSTMCell(rnn_dim, rnn_dim)
     self.actor_linear = nn.Linear(rnn_dim, 2)
     self.critic_linear = nn.Linear(rnn_dim, 1)
+    self.batch_norm = nn.BatchNorm1d(
+      rnn_dim, affine=False, track_running_stats=False)
     # initialization
     self.apply(weights_init)
     self.actor_linear.weight.data = norm_col_init(
@@ -111,15 +119,19 @@ class Sampler(BaseModule):
     self.critic_linear.weight.data = norm_col_init(
         self.critic_linear.weight.data, 1.0)
     self.critic_linear.bias.data.fill_(0)
-    self.lstm.bias_ih.data.fill_(0)
-    self.lstm.bias_hh.data.fill_(0)
+    self.actor_lstm.bias_ih.data.fill_(0)
+    self.actor_lstm.bias_hh.data.fill_(0)
+    self.critic_lstm.bias_ih.data.fill_(0)
+    self.critic_lstm.bias_hh.data.fill_(0)
     # lstm states
     self.zero_states()
 
-  def to(self, *args, **kwargs):
-    self.hx, self.cx = self.hx.to(self.device), self.cx.to(self.device)
-
-    return super(Sampler, self).to(*args, **kwargs)
+  def to(self, device, non_blocking=False):
+    self.actor_hx = self.actor_hx.to(device, non_blocking=non_blocking)
+    self.actor_cx = self.actor_cx.to(device, non_blocking=non_blocking)
+    self.critic_hx = self.critic_hx.to(device, non_blocking=non_blocking)
+    self.critic_cx = self.critic_cx.to(device, non_blocking=non_blocking)
+    return super(Sampler, self).to(device, non_blocking)
 
   def mean_by_labels(self, tensor, labels):
     mean = []
@@ -134,7 +146,7 @@ class Sampler(BaseModule):
     std = var.sqrt()
     skew = ((x - mean)**3 / (std**3 + eps)).mean(dim=dim, keepdim=True) + eps
     kurt = ((x - mean)**4 / (std**4 + eps)).mean(dim=dim, keepdim=True) + eps
-    out = [mean, var, skew, kurt]
+    out = [mean, std, skew, kurt]
     if detach:
       out = list(map(lambda x: getattr(x, 'detach')(), out))
     return torch.cat(out, dim=-1)
@@ -147,16 +159,20 @@ class Sampler(BaseModule):
     return torch.cat([x_mean, x_stat], dim=1), x_stat_
 
   def zero_states(self):
-    self.hx = torch.zeros(1, self.rnn_dim).to(self.device)
-    self.cx = torch.zeros(1, self.rnn_dim).to(self.device)
+    self.actor_hx = torch.zeros(1, self.rnn_dim).to(self.device)
+    self.actor_cx = torch.zeros(1, self.rnn_dim).to(self.device)
+    self.critic_hx = torch.zeros(1, self.rnn_dim).to(self.device)
+    self.critic_cx = torch.zeros(1, self.rnn_dim).to(self.device)
 
   def detach_states(self):
-    if not hasattr(self, 'hx'):
-      raise RuntimeError('Sampler.hx does NOT exist!')
-    self.hx = self.hx.detach()
-    self.cx = self.cx.detach()
+    if not hasattr(self, 'actor_hx'):
+      raise RuntimeError('LSTM states have NOT been initialized!')
+    self.actor_hx = self.actor_hx.detach()
+    self.actor_cx = self.actor_cx.detach()
+    self.critic_hx = self.critic_hx.detach()
+    self.critic_cx = self.critic_cx.detach()
 
-  def forward(self, state):
+  def forward(self, state, eps=0.0):
     # encoder
     if self.encoder is not None:
       encoded = self.encoder(state.meta_s)
@@ -167,64 +183,117 @@ class Sampler(BaseModule):
       # TODO: encoded=? when self.encoder is None
 
     # preprocess [value, mean, skew, kurt]
-    loss, loss_ = self.preprocess(encoded.loss, encoded.labels)
-    acc, acc_ = self.preprocess(encoded.acc.float(), encoded.labels)
-    dist, dist_ = self.preprocess(encoded.dist.mean(1), encoded.labels)
+    cls_loss = encoded.cls_loss / np.log(encoded.n_classes)
+    cls_dist = encoded.cls_dist.mean(1)
+    cls_dist = (cls_dist - cls_dist.min()) / cls_dist.max()
+    # utils.forkable_pdb().set_trace()
+    loss, loss_ = self.preprocess(cls_loss, encoded.labels)
+    acc, acc_ = self.preprocess(encoded.cls_acc.float(), encoded.labels)
+    dist, dist_ = self.preprocess(cls_dist, encoded.labels)
     # concatenat preprocessed tensors [loss, acc, dist]
-    x_classwise = torch.cat([loss, acc, dist], dim=1).detach()
+    x_classwise_ = torch.cat([loss, acc, dist], dim=1).detach()
     x_global = torch.cat([loss_, acc_, dist_], dim=0).detach()
     # classwise: [n_class, input_dim] / global: [input_dim]
 
     # classwise linear
-    x_classwise = self.classwise_linear(x_classwise)
+    x_classwise = self.classwise_linear(x_classwise_)
+    x_classwise = self.batch_norm(x_classwise)
+    # x_classwise = (x_classwise - x_classwise.mean(0)).div(x_classwise.std(0))
+    # utils.forkable_pdb().set_trace()
+
     # global linear + rnn
     x_global = self.global_linear(x_global.unsqueeze(0))
-    self.hx, self.cx = self.lstm(x_global, (self.hx, self.cx))
-    x_global = self.hx
-    # merge classwise + global
-    x_merged = x_classwise + x_global
+    self.actor_hx, self.actor_cx = self.actor_lstm(
+      x_global, (self.actor_hx, self.actor_cx))
+    x_global = self.actor_hx
 
     # action
+    x_merged = x_classwise + x_global
     logits = self.actor_linear(x_merged)
     probs = F.softmax(logits, dim=1)
+    mask = self.sample_mask(probs, eps)
     log_probs = F.log_softmax(logits, dim=1)
-    entropy= -(log_probs * probs).sum(1)
-    action = DotMap(dict(probs=probs, log_probs=log_probs, entropy=entropy))
+    entropy = -(log_probs * probs).sum(1)
+    log_probs = log_probs.gather(1, mask)
+    action = DotMap(dict(
+        mask=mask,
+        probs=probs,
+        log_probs=log_probs,
+        entropy=entropy,
+    ))
 
     # value
-    value = self.critic_linear(x_global).squeeze()
+    # utils.forkable_pdb().set_trace()
+    x_classwise = self.classwise_linear2(x_classwise_) + x_global
+
+    x_selected = x_classwise[mask.bool().squeeze()].mean(0, keepdim=True)
+    x_populated = x_classwise.mean(0, keepdim=True)
+    x_selected = self.tanh(self.group_linear(x_selected))
+    x_populated = self.tanh(self.group_linear(x_populated))
+    x_relative = x_populated + x_selected
+    self.critic_hx, self.critic_cx = self.critic_lstm(
+      x_relative, (self.critic_hx, self.critic_cx))
+    value = self.critic_linear(self.critic_hx).squeeze()
     return action, value, embed
 
-  def save(self, save_path=None):
+  def random_mask(self, size):
+    return (torch.ones(size) * 0.5).multinomial(1).data.to(self.device)
+
+  def sample_mask(self, probs, eps=0.1):
+    if random.uniform(0, 1) < eps or probs[:, 1].sum() == 0:
+      if probs[:, 1].sum() == 0:
+        print('Zero mask! Random_mask will be applied!')
+      mask = self.random_mask(probs.size())
+    else:
+      n_iter, max_iter = 0, 1000
+      while True:
+        n_iter += 1
+        mask = probs.multinomial(1).data
+        if n_iter >= max_iter:
+          print('Resampling number exceeded maximum iteration! '
+                'Random mask will be applied!')
+          mask = self.random_mask(probs.size())
+        if mask.sum() > 0:
+          break
+    return mask
+
+  def save(self, save_path=None, file_name=None):
     if save_path:
+      if file_name is None:
+        file_name = Sampler._save_name
       # sys.setrecursionlimit(10000)  # workaround for recursion error
-      file_path = os.path.join(save_path, Sampler._save_name)
+      file_path = os.path.join(save_path, file_name)
       with open(file_path, 'wb') as f:
         torch.save(self.state_dict(), f)
       print(f'Saved meta-learned parameters as: {file_path}')
     return self
 
-  @classmethod
-  def load(cls, load_path):
-    file_path = os.path.join(load_path,  Sampler._save_name)
+  def load(self, load_path, device=None, file_name=None):
+    if file_name is None:
+      file_name = Sampler._save_name
+    file_path = os.path.join(load_path,  file_name)
+    device = self.device if device is None else device
     with open(file_path, 'rb') as f:
-      state_dict = torch.load(f)
+      state_dict = torch.load(f, map_location=device)
     print(f'Loaded meta-learned params from: {file_path}')
-    model = cls()
-    model.load_state_dict(state_dict)
-    return model
+    self.load_state_dict(state_dict)
+    return self
 
   def new(self):
     return Sampler(
-      self.embed_dim, self.rnn_dim, self.mask_unit, self.encoder.new())
+        self.embed_dim, self.rnn_dim, self.mask_unit, self.encoder.new())
 
   def copy_state_from(self, sampler_src, non_blocking=False):
     self.load_state_dict(sampler_src.state_dict())
     self.to(self.device, non_blocking=non_blocking)
 
   def copy_grad_to(self, sampler_tar):
-    for tar, src in zip(sampler_tar.parameters(), self.parameters()):
-      tar._grad = src.grad.to(tar.device)
+    for tar, (name, src) in zip(
+      sampler_tar.parameters(), self.named_parameters()):
+      if src.grad is None:
+        print(f'[!] {name} is not being used.')
+      else:
+        tar._grad = src.grad.to(tar.device)
 
   def encoder_params(self):
     if self.encoder is None:

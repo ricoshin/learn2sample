@@ -20,10 +20,9 @@ class Model(BaseModule):
   """Base-learner Module."""
 
   def __init__(self, input_dim, embed_dim, channels, kernels,
-               distance_type='cosine', last_layer='metric', optim_getter=None,
-               n_classes=None, auto_reset=True, preprocess=None):
+               distance_type='cosine', fc_pulling=False, optim_getter=None,
+               n_classes=None, auto_reset=False, preprocess=None):
     super(Model, self).__init__()
-    assert last_layer in ['fc', 'metric']
     assert distance_type in ['euclidean', 'cosine']
     if optim_getter is not None:
       assert isinstance(optim_getter, OptimGetter)
@@ -34,7 +33,7 @@ class Model(BaseModule):
     self.channels = channels
     self.kernels = kernels
     self.distance_type = distance_type
-    self.last_layer = last_layer
+    self.fc_pulling = fc_pulling
     self.ch = [3] + channels  # 1st: 3 channels for input image
     self.kn = kernels
     self.optim_getter = optim_getter
@@ -62,17 +61,17 @@ class Model(BaseModule):
   def new(self):
     # deepcopy + reset?
     return Model(self.input_dim, self.embed_dim, self.channels, self.kernels,
-                 self.distance_type, self.last_layer, self.optim_getter,
-                 self.n_classes, self.auto_reset, self.preprocess).to(
-                  self.device)
+                 self.distance_type, self.fc_pulling, self.optim_getter,
+                 self.n_classes, self.auto_reset, self.preprocess
+                 ).to(self.device)
 
   def copy_state_from(self, sampler_src):
     self.load_state_dict(sampler_src.state_dict())
     self.to(self.device)
     self.optim = self.optim_getter(self.parameters())
 
-  def reset(self):
-    self.layers = self.build().to(self.device)
+  def reset(self, n_classes=None):
+    self.layers = self.build(n_classes).to(self.device)
     if self.optim_getter:
       self.optim  = self.optim_getter(self.parameters())
       # # reset optimizer with new parameters
@@ -81,7 +80,7 @@ class Model(BaseModule):
       # self.optim.defaults = defaults_backup
     return self
 
-  def build(self):
+  def build(self, n_classes=None):
     layers = nn.ModuleDict()
     for i in range(len(self.ch) - 1):
       # conv blocks
@@ -89,7 +88,7 @@ class Model(BaseModule):
           [f'conv_{i}', nn.Conv2d(self.ch[i], self.ch[i + 1], self.kn[i])],
           # [f'norm_{i}', nn.GroupNorm(self.n_group, self.ch[i + 1])],
           [f'bn_{i}', nn.BatchNorm2d(
-              self.ch[i + 1], track_running_stats=False)],
+              self.ch[i + 1], track_running_stats=True)],
           [f'relu_{i}', nn.ReLU(inplace=True)],
           [f'mp_{i}', nn.MaxPool2d(2, 2)],
       ])
@@ -103,12 +102,14 @@ class Model(BaseModule):
     # linear layers
     layers.update({f'flatten': Flatten()})
     layers.update({f'fc_embed': nn.Linear(x_dim, self.embed_dim)})
-    if self.last_layer == 'fc':
-      layers.update({f'fc_class': nn.Linear(self.embed_dim, self.n_classes)})
+    if self.fc_pulling:
+      if n_classes is None:
+        raise Exception('n_classes has to be specified on fc_pulling mode.')
+      layers.update({f'fc_class': nn.Linear(self.embed_dim, n_classes)})
     layers.apply(weights_init)
     return layers
 
-  def forward(self, data, use_fc=False, debug=False):
+  def forward(self, data, debug=False):
     """
     Args:
       data (loader.Dataset or loader.Episode):
@@ -122,20 +123,18 @@ class Model(BaseModule):
     """
     if not hasattr(self, 'layers'):
       raise RuntimeError('Do .reset() first!')
-
-    if use_fc and self.last_layer == 'metric':
-      raise Exception("Can't use fc layer when Model.layer_layer == 'metric'.")
+    use_fc = self.fc_pulling and data.name == 'Support'
 
     # images and labels
     if isinstance(data, Dataset):
       # when using Meta-dataset
       x = data.imgs  # [n_cls*n_ins, 3, 84, 84]
-      y = data.labels  # [n_cls*n_ins]
+      y = data.labels if use_fc else data.in_labels  # [n_cls*n_ins]
       classwise_fn = data.get_view_classwise_fn()
     elif isinstance(data, Episode):
       # when using customized bi-level dataset
-      x = data.concatenated.imgs
-      y = data.concatenated.labels
+      x = data.merged.imgs  # merged: support + query
+      y = data.merged.labels if use_fc else data.merged.in_labels
       classwise_fn = data.q.get_view_classwise_fn()
     else:
       raise Exception(f'Unknown type: {type(data)}')
@@ -143,31 +142,38 @@ class Model(BaseModule):
     if self.preprocess:
       x = self.preprocess(x)
 
-    for layer in self.layers.values():
-      x = layer(x)
+    for name, layer in self.layers.items():
+      if not name == 'fc_class':
+        x = layer(x)
 
+    # utils.ForkablePdb().set_trace()
     n_samples = x.size(0)
-    x_embed = x.view(n_samples, -1)  # [n_samples, embed_dim(576)]
-    support_embed = x_embed[:n_samples // 2]
-    query_embed = x_embed[n_samples // 2:]
-    dist = self._pairwise_dist(
-        support_embed=support_embed,
-        query_embed=query_embed,
+    # x_embed = x.view(n_samples, -1)  # [n_samples, embed_dim(576)]
+    # support_embed = x[:n_samples // 2]
+    # query_embed = x[n_samples // 2:]
+    cls_dist = self._pairwise_dist(
+        support_embed=x[:n_samples // 2],
+        query_embed=x[n_samples // 2:],
         labels=data.q.labels,
     )
 
+    loss = 0
+    # fc-pulling
     if use_fc:
-      # fix later
-      logits = x.view(x.size(0), self.n_classes)
-    elif self.last_layer == 'metric':
-      logits = dist
-      y = data.q.labels
-
-    try:
-      loss = F.cross_entropy(logits, y, reduction='none')
-    except:
-      utils.ForkablePdb().set_trace()
-    acc = logits.argmax(dim=1) == y
+      logits = self.layers['fc_class'](x)
+      loss += F.cross_entropy(logits, data.merged.labels)
+    # metric-based
+    if self.distance_type == 'euclidean':
+      logits = cls_dist.neg()  # the smaller, the better
+      # cls_dist = cls_dist.sqrt()  # too large, otherwise
+    elif self.distance_type == 'cosine':
+      loss += x.norm(p=2) * 0.01  # has to be tuned
+      logits = cls_dist
+    else:
+      raise Exception(f'Unknown type: {self.distance_type}')
+    cls_loss = F.cross_entropy(logits, data.q.in_labels, reduction='none')
+    cls_acc = logits.argmax(dim=1) == data.q.in_labels
+    # loss += cls_loss.mean() * 0.1
 
     if debug:
       utils.ForkablePdb().set_trace()
@@ -175,11 +181,13 @@ class Model(BaseModule):
     # returns output
     return DotMap(dict(
         loss=loss,
-        acc=acc,
-        embed=x_embed,
-        dist=dist,
+        cls_loss=cls_loss,
+        cls_acc=cls_acc,
+        cls_dist=cls_dist,
+        embed=x,
         logits=logits,
-        labels=y,
+        labels=data.q.in_labels,
+        n_classes=len(data.q.classwise),
     ))
 
   def _pairwise_dist(self, support_embed, query_embed, labels):
@@ -194,10 +202,10 @@ class Model(BaseModule):
     if self.distance_type == 'euclidean':
       # [n_samples, n_classes, dim]
       pairwise_dist = (proto_types - query_embed)**2
-      pairwise_dist = pairwise_dist.sum(dim=2) * (-1)
+      pairwise_dist = pairwise_dist.sum(dim=2)
     elif self.distance_type == 'cosine':
-      proto_types = F.normalize(proto_types, p=2, dim=2)
-      query_embed = F.normalize(query_embed, p=2, dim=2)
+      # proto_types = F.normalize(proto_types, p=2, dim=2)
+      # query_embed = F.normalize(query_embed, p=2, dim=2)
       # [n_samples, n_classes, dim]
       pairwise_dist = proto_types * query_embed
       pairwise_dist = pairwise_dist.sum(dim=2)
