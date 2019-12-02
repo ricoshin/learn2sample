@@ -184,7 +184,7 @@ class Environment(object):
       info.acc_gain = acc_gain  # update acc_gain
       reward += acc_gain
       if acc_gain > 0:
-        sp_reward = (1 - sparsity**2) *  # sparsity reward
+        sp_reward = (1 - sparsity**2) * 1.0  # sparsity reward
         info.sp_reward = sp_reward
         reward += sp_reward
       else:
