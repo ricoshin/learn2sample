@@ -3,24 +3,28 @@ dirs:
   imagenet_devkit: /v9/whshin/imagenet/ILSVRC2012_devkit_t12
   result: result
 
-control:
-  diverse_start: False
+ctrl:
+  diverse_start: True
   sync_baseline: True
   async_stream: True
-  no_valid: False  # for debuggin
+  no_valid: False  # for debugging
+  no_log: False
+  q_track:
+    train: True
+    test: True
 
 steps:
   outer:
-    max: 10000
+    max: 1000
     anneal: 0  # 0 = no annealing
   inner:
-    max: 1000
-    unroll: 20
-    log: 20
-    query: 100
+    max: 500
+    unroll: 50
+    log: 25
+    query: 50
   test:
-    outer: 1
-    inner: 10000
+    outer: 5
+    inner: 10
     log: 20
 
 loader:
@@ -30,21 +34,21 @@ loader:
   class_size: 10
   sample_size: 5
   batch_size: 64
-  num_workers: 4
+  num_workers: 2
   pin_memory: True
 
 model:
-  # lr: 0.01  # metric
-  lr: 0.1  # fc
+  lr: 0.0001  # metric
+  # lr: 0.01  # fc
   optim: sgd
   embed_dim: 256
   channels: [64, 64, 64, 64]
   kernels: [3, 3, 3, 3]
-  fc_pulling: True
+  fc_pulling: False
   distance_type: euclidean  # euclidean / cosine
 
 sampler:
-  lr: 0.01
+  lr: 0.001
   grad_norm: 40
   rnn_dim: 256
   optim: adam  # adam / rmsprop
@@ -55,11 +59,12 @@ sampler:
   eps: 0.1  # epsilon-greedy
   encoder:
     reuse_model: False
-    lr: 0.1
+    lr: 0.01
     channels: [64, 64]
     kernels: [3, 3]
 
 rl:
+  max_action_collapsed: 10
   gamma: 0.99
   gae: False
   tau: 1.00

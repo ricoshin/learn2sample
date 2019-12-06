@@ -50,6 +50,9 @@ class Metadata(object):
   def __getitem__(self, rel_idx):
     return self.idx_to_samples[self.abs_idx[rel_idx]]
 
+  # def __getitem__(self, rel_idx):
+  #   return self.select_classes(rel_idx, name=self.name)
+
   def __eq__(self, other):
     return set(self.classes) == set(other.classes)
 
@@ -260,7 +263,8 @@ class Metadata(object):
       idx_to_samples[idx] = samples
     return idx_to_samples
 
-  def _select_class(self, rel_idx, name=_METADATA_DEFAULT_NAME):
+  # def select_classes(self, rel_idx, name=_METADATA_DEFAULT_NAME):
+  def select_classes(self, rel_idx, name=None):
     assert isinstance(rel_idx, (list, tuple))
     classes = []
     class_to_idx = dict()
@@ -271,13 +275,15 @@ class Metadata(object):
       classes.append(class_)
       class_to_idx[abs_idx] = self.class_to_idx[class_]
       idx_to_samples[abs_idx] = self.idx_to_samples[abs_idx]
+    if name is None:
+      name = self.name
     return self.new(
-        class_to_idx, class_to_idx, idx_to_samples, name=_METADATA_DEFAULT_NAME)
+        class_to_idx, class_to_idx, idx_to_samples, name=name)
 
   def sample_classes(self, num, name=_METADATA_DEFAULT_NAME):
     sampled_idx = np.random.choice(
         len(self), num, replace=False).tolist()
-    return self._select_class(sampled_idx, name=name)
+    return self.select_classes(sampled_idx, name=name)
 
   def sample_instances(self, num, name=_METADATA_DEFAULT_NAME):
     meta = copy.deepcopy(self)
@@ -324,7 +330,7 @@ class Metadata(object):
     for i, r in enumerate(ratio):
       thres = int(len(self) * r)
       meta_data = copy.deepcopy(self)
-      meta_data = meta_data._select_class(class_idx[prev_thres:thres])
+      meta_data = meta_data.select_classes(class_idx[prev_thres:thres])
       if names:
         meta_data.name = names[i]
       meta_data_list.append(meta_data)
@@ -368,7 +374,7 @@ class Metadata(object):
     assert method in ['exclusive', 'inclusive']
     if method == 'exclusive':
       if ratio is None:
-        ratio = ('Support', 1), ('Query', 2)  # 1(100) : 4(400)
+        ratio = ('Support', 1), ('Query', 1)  # 1(100) : 4(400)
       meta_support, meta_query = self.split_classes(ratio)
     elif method == 'inclusive':
       if ratio is None:
@@ -469,7 +475,7 @@ class ImagenetMetadata(Metadata):
     val_wnids = [idx_to_wnid[idx] for idx in val_idcs]
     return classes, class_to_wnid
 
-  def _select_class(self, rel_idx, name=_METADATA_DEFAULT_NAME):
+  def select_classes(self, rel_idx, name=_METADATA_DEFAULT_NAME):
     assert isinstance(rel_idx, (list, tuple))
     classes = []
     wnids = []

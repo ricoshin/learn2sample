@@ -89,10 +89,12 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
   ##############################################################################
   for outer_step, inner_step in m:
     if m.start_of_episode() or m.start_of_unroll():
+      if m.start_of_episode():
+        print(f'start epi: {rank}')
       # if train or (not train and m.start_of_episode()):
       # copy from shared memory
       if not train:
-        print('Update parameters from shared memory.')
+        print('Load parameters from shared memory.')
       sampler.copy_state_from(shared_sampler, non_blocking=True)
       actions, values, rewards = [], [], []
       loss_encoder = 0
@@ -105,33 +107,47 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
     ############################################################################
     # RL step
     eps = cfg.sampler.eps if train else 0
-    action, value, embed_sampler = sampler(state, eps)
-    # action = action_.sample()
-    state, reward, info, embed_model = env(action, loop_manager=m)
+    action, value, embed_sampler = sampler(state, eps, debug=not train)
+    state, reward, info, terminal = env(action, loop_manager=m)
+    # sampler encoder loss
+    embed_model = info.base.s.embed
     loss_encoder += F.mse_loss(embed_sampler, embed_model.detach())
+    # record results
     actions.append(action)
     values.append(value)
     rewards.append(reward)
     ############################################################################
-
-    if not train and m.log_step():
+    if ((not train and m.log_step()) or
+       ((cfg.ctrl.no_valid or rank == 0) and m.log_step())):
+    # if rank == 0 and inner_step % 10 == 0:
       print(f'\n[Dir] {cfg.dirs.save.top}')
       print(f'[Step] outer: {outer_step:4d} | inner: {inner_step:4d}')
       # Note that loss is actual loss that was used for training
       #           acc is metric acc and does not care about fc layer.
-      print(f'[Model] loss: {state.loss:6.3f} | '
-            f'acc: {state.cls_acc.float().mean():6.3f} | '
-            f'sparsity: {state.sparsity:6.3f}')
-      print(f'[Base] loss: {info.base.loss:6.3f} | '
-            f'acc: {info.base.cls_acc.float().mean():6.3f} | '
-            f'sparsity: {info.base.sparsity:6.3f}')
-      print(f'[RL] reward: {reward:6.3f} () | value: {value:6.3f}\n')
+      print(f'[Model(S)] loss(act): {info.ours.s.loss:6.3f} | '
+            f'loss: {info.ours.s.cls_loss.mean():6.3f} | '
+            f'acc: {info.ours.s.cls_acc.float().mean():6.3f} | '
+            f'sparsity: {info.ours.mask_sp:6.3f}')
+      print(f'[Base (S)] loss(act): {info.base.s.loss:6.3f} | '
+            f'loss: {info.base.s.cls_loss.mean():6.3f} | '
+            f'acc: {info.base.s.cls_acc.float().mean():6.3f} | '
+            f'sparsity: {info.base.mask_sp:6.3f}')
+      if cfg.ctrl.q_track.train:
+        print(f'[Model(Qt)] loss(act): {info.ours.qt.loss:6.3f} | '
+              f'loss: {info.ours.qt.cls_loss.mean():6.3f} | '
+              f'acc: {info.ours.qt.cls_acc.float().mean():6.3f}')
+        print(f'[Base (Qt)] loss(act): {info.base.qt.loss:6.3f} | '
+              f'loss: {info.ours.qt.cls_loss.mean():6.3f} | '
+              f'acc: {info.base.qt.cls_acc.float().mean():6.3f}')
+      probs = ' | '.join([f'{p:6.3f}' for p in action.probs[:6, 1].tolist()])
+      print(f'[RL] action(p[:6]): {probs}')
+      print(f'[RL] reward: {reward:6.3f} | value: {value:6.3f}\n')
 
 
-    if not (m.end_of_episode() or m.end_of_unroll()):
+    if not (terminal or m.end_of_episode() or m.end_of_unroll()):
       continue  # keep stacking action/value/reward
 
-    if m.end_of_episode():
+    if terminal or m.end_of_episode():
       R = torch.tensor(0).to(device)
     else:
       R = sampler(state)[1]
@@ -152,10 +168,11 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
       #   utils.forkable_pdb().set_trace()
       loss_value += (0.5 * td.pow(2)).squeeze()
       log_probs = actions[i].log_probs.mean()
+      entropy = actions[i].entropy.mean()
       if not cfg.rl.gae:
         # Default actor-critic policy loss
         # utils.ForkablePdb().set_trace()
-        loss_policy -= log_probs * td.detach().squeeze()
+        loss_policy -= log_probs * td.detach().squeeze() #+ entropy
       else:
         # GAE(Generalized Advantage Estimation)
         delta_t = rewards[i] + cfg.rl.gamma * \
@@ -165,11 +182,18 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
         entropy = actions[i].entropy.sum()
         loss_policy = loss_policy - gae.data * log_probs - 0.000001 * entropy
     ############################################################################
+    # loss averaged by step number
+    loss_value = loss_value / len(rewards)
+    loss_policy = loss_policy / len(rewards)
+    loss_encoder = loss_encoder / len(rewards)
 
     if train and all(ready):
       # update global sampler
       sampler.zero_grad()
-      loss_total = loss_policy + loss_value + loss_encoder
+      # utils.forkable_pdb().set_trace()
+      loss_total = loss_value + loss_encoder + loss_policy
+      # if loss_encoder < 1.0:
+        # loss_total += loss_policy
       loss_total.backward()
       clip_grad_norm_(sampler.parameters(), cfg.sampler.grad_norm)
       sampler.copy_grad_to(shared_sampler)
@@ -191,23 +215,30 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
       reward_total += reward_trunc
       reward_trunc_avg = reward_trunc / m.unroll_steps
       reward_total_avg = reward_total / inner_step
-      print(f'[Step] outer: {outer_step:4d} | inner: {inner_step:4d}')
-      print(f'[Loss] policy: {loss_policy:6.3f} | '
-            f'value: {loss_value:6.3f} | '
-            f'encoder: {loss_encoder:6.3f}')
-      print(f'[Info] acc_gain: {info.acc_gain:6.3f} | '
-            f'sp: {info.sp_reward:6.3f}')
-      print(f'[Reward] avg_truc: {reward_trunc_avg:6.3f} | '
-            f'avg_total: {reward_total_avg:6.3f}')
-      try:
-        print(f'[1st TD] R: {R:6.3f} | V: {values[i]:6.3f} | R-V: {td:6.3f}\n')
-      except Exception as e:
+      if not cfg.ctrl.no_log:
+        print(f'[Step] outer: {outer_step:4d} | inner: {inner_step:4d}')
+        print(f'[RL_Loss] policy: {loss_policy:6.3f} | '
+              f'value: {loss_value:6.3f} | '
+              f'encoder: {loss_encoder:6.3f} | '
+              f'entropy: {entropy:6.3f}')
+        try:
+          print(f'[Info] self_gain: {info.r.self_gain:6.3f} | '
+                f'rel_gain: {info.r.rel_gain:6.3f} | '
+                f'sp: {info.r.sparsity:6.3f}')
+        except:
+          print(info.r.self_gain, info.r.rel_gain, info.r.sparsity)
+        print(f'[Model_Acc(Q)] ours_prev: {info.ours.q.acc_prev:6.3f} | '
+              f'ours: {info.ours.q.acc:6.3f} | base: {info.base.q.acc:6.3f}')
+        print(f'[Reward] avg_truc: {reward_trunc_avg:6.3f} | '
+              f'avg_total: {reward_total_avg:6.3f}')
+        try:
+          print(f'[1st TD] R: {R:6.3f} | V: {values[i]:6.3f} | TD: {td:6.3f}\n')
+        except Exception as e:
+          if not train:
+            print(e)
+            utils.forkable_pdb().set_trace()
 
-        if not train:
-          print(e)
-          utils.forkable_pdb().set_trace()
-
-    if m.end_of_episode():
+    if terminal or m.end_of_episode():
       if not train:
         # TODO: when truncation lengths vary, this does not make sense
         loss_mean = dict(policy=loss_policy / m.n_trunc,
@@ -223,8 +254,14 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
           #            f'{outer_step}_{inner_step}.sampler')
           print(f'[!] Best reward({reward_best:6.3f})! Sampler saved.')
         print('End of episode.\n')
+        # if terminal:
+        #   print('[!] Terminal state.')
+      if terminal:
+        print(f'[!] Terminal state: {rank}.')
+        m.next_episode()
       state = env.reset()
       sampler.zero_states()
+
   ##############################################################################
   ##############################################################################
   return None
@@ -250,8 +287,6 @@ def initialize(cfg, metadata, device):
         pin_memory=cfg.loader.pin_memory,
     ).to(device, non_blocking=True)
     batch_size = cfg.loader.batch_size
-
-
   # model (belongs to enviroment)
   model = Model(
       input_dim=cfg.loader.input_dim,
@@ -270,8 +305,10 @@ def initialize(cfg, metadata, device):
       loader_cfg=loader_cfg,
       data_split_method=cfg.loader.split_method,
       mask_unit=cfg.sampler.mask_unit,
-      async_stream=cfg.control.async_stream,
-      sync_baseline=cfg.control.sync_baseline,
+      async_stream=cfg.ctrl.async_stream,
+      sync_baseline=cfg.ctrl.sync_baseline,
+      query_track=cfg.ctrl.q_track.train,
+      max_action_collapsed=cfg.rl.max_action_collapsed,
   ).to(device, non_blocking=True)
 
   return model, env

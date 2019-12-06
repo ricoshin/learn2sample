@@ -43,7 +43,8 @@ parser.add_argument('--gpu_all', action='store_true',
 parser.add_argument('--debug', action='store_true', help='debug mode on.')
 parser.add_argument('--eval_dir', type=str, default='',
                     help='path to learned parameter for evaluation.')
-
+parser.add_argument('--no_valid', action='store_true',
+                    help='run training agent only.')
 
 def main(cfg):
   # [ImageNet 1K] meta-train:100 / meta-valid:450 / meta-test:450 (classes)
@@ -54,9 +55,8 @@ def main(cfg):
   )
   # meta_data, _ = meta_data.split_classes((5, 5))
   # meta_train, meta_valid, meta_test = meta_data.split_classes((1, 2, 2))
-  # meta_data, _ = meta_data.split_classes((5, 5))
-  meta_train, meta_valid, meta_test = meta_data.split_classes((1, 1, 8))
-  # import pdb; pdb.set_trace()
+  meta_data, _ = meta_data.split_classes((60, 940))
+  meta_train, meta_valid, meta_test = meta_data.split_classes((1, 1, 1))
 
   print('Loading a shared sampler..')
   # encoder (feature extractor)
@@ -99,7 +99,7 @@ def main(cfg):
   if not (len(cfg.args.gpu_ids) == 1 and cfg.args.gpu_ids[0] == -1):
     mp.set_start_method('spawn')  # just for GPUs
 
-  if cfg.control.no_valid:
+  if cfg.ctrl.no_valid:
     n_train_workers = cfg.args.workers
   else:
     n_train_workers = cfg.args.workers - 1
@@ -112,7 +112,8 @@ def main(cfg):
 
   # status
   ready_step = list(reversed(range(0, cfg.steps.inner.max, trunc_size)))
-  ready = [False if cfg.control.diverse_start else True]
+  ready = [False if cfg.ctrl.diverse_start else True]
+  # import pdb; pdb.set_trace()
   ready = mp.Array(c_bool, ready * n_train_workers)
   done = mp.Value(c_bool, False)
   ##############################################################################
@@ -153,7 +154,7 @@ def main(cfg):
     ##############################################################################
     p.start()
     processes.append(p)
-    time.sleep(0.1)
+    time.sleep(0.5)
 
   print(f'Forked/spawned all the processes.')
   for p in processes:

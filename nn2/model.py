@@ -145,6 +145,8 @@ class Model(BaseModule):
     for name, layer in self.layers.items():
       if not name == 'fc_class':
         x = layer(x)
+        if torch.isnan(x).any():
+          utils.forkable_pdb().set_trace()
 
     # utils.ForkablePdb().set_trace()
     n_samples = x.size(0)
@@ -156,6 +158,9 @@ class Model(BaseModule):
         query_embed=x[n_samples // 2:],
         labels=data.q.labels,
     )
+
+    if torch.isnan(cls_dist).any():
+      utils.forkable_pdb().set_trace()
 
     loss = 0
     # fc-pulling
@@ -173,10 +178,11 @@ class Model(BaseModule):
       raise Exception(f'Unknown type: {self.distance_type}')
     cls_loss = F.cross_entropy(logits, data.q.in_labels, reduction='none')
     cls_acc = logits.argmax(dim=1) == data.q.in_labels
-    # loss += cls_loss.mean() * 0.1
+    if not use_fc:
+      loss += cls_loss.mean()
 
-    if debug:
-      utils.ForkablePdb().set_trace()
+    # if debug:
+    #   utils.ForkablePdb().set_trace()
 
     # returns output
     return DotMap(dict(

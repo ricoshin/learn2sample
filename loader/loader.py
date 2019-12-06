@@ -1,3 +1,4 @@
+import random
 from collections import OrderedDict
 
 import torch
@@ -35,28 +36,40 @@ class RandomBatchSampler(data.Sampler):
      distribution unlike ClassBalancedBatchSampler.
   """
 
-  def __init__(self, meta, batch_size, n_repeat_classes=1):
+  def __init__(self, meta, batch_size, n_repeat_classes=1, replacement=False,
+               drop_last=False):
     assert isinstance(meta, metadata.Metadata)
     assert isinstance(n_repeat_classes, int) and n_repeat_classes >= 1
     self.meta = meta
     self.batch_size = batch_size
     self.n_repeat_classes = n_repeat_classes
+    self.replacement = replacement
+    self.indices = list(range(sum([v for v in self.meta.idx_to_len.values()])))
+
+  def sampled_idx(self):
+    if self.replacement:
+      batch = []
+      for idx in random.sample(self.indices, len(self.indices)):
+        batch.append(idx)
+        if len(batch) == self.batch_size:
+          yield batch
+          batch = []
+      if len(batch) > 0 and not self.drop_last:
+        yield batch
+    else:
+      while True:
+        yield random.sample(self.indices, self.batch_size)
 
   def __iter__(self):
     _n_repeated = 0
     _to_repeat = []
-    while True:
+    for idx in self.sampled_idx():
       batch = []
       if _n_repeated == 0:
         n_classes = len(self.meta)
-        max_n_samples = sum([v for v in self.meta.idx_to_len.values()])
-        try:
-          sampled_idx = randint(0, max_n_samples, self.batch_size)
-        except:
-          utils.ForkablePdb().set_trace()
         for i in range(self.batch_size):
-          batch.append(sampled_idx[i])
-          _to_repeat.append(self.meta.idx_uni_to_bi(sampled_idx[i]))
+          batch.append(idx[i])
+          _to_repeat.append(self.meta.idx_uni_to_bi(idx[i]))
       else:
         for class_idx, sample_idx in _to_repeat:
           max_n_samples = self.meta.idx_to_len[self.meta.abs_idx[class_idx]]
@@ -72,21 +85,39 @@ class RandomBatchSampler(data.Sampler):
 
 
 class BalancedBatchSampler(data.Sampler):
-  def __init__(self, meta, class_size, sample_size, n_repeat_classes=1):
+  def __init__(self, meta, class_size, sample_size, n_repeat_classes=1,
+               replacement=False, drop_last=False):
     assert isinstance(meta, metadata.Metadata)
     assert isinstance(n_repeat_classes, int) and n_repeat_classes >= 1
     self.meta = meta
     self.class_size = class_size
     self.sample_size = sample_size
     self.n_repeat_classes = n_repeat_classes
+    self.replacement = replacement
+    self.drop_last = drop_last
+    self.cls_indices = list(range(len(self.meta)))
+
+  def sampled_cls_idx(self):
+    if self.replacement:
+      batch = []
+      for cls_idx in random.sample(self.cls_indices, self.class_size):
+        batch.append(cls_idx)
+        if len(batch) == self.class_size:
+          yield batch
+          batch = []
+      if len(batch) > 0 and not self.drop_last:
+        yield batch
+    else:
+      while True:
+        yield random.sample(self.cls_indices, self.class_size)
 
   def __iter__(self):
     _n_repeated = 0
     _to_repeat = []
-    while True:
+    for cls_idx in self.sampled_cls_idx():
       batch = []
       if _n_repeated == 0:
-        meta_sampled = self.meta.sample_classes(self.class_size)
+        meta_sampled = self.meta.select_classes(cls_idx)
         if self.n_repeat_classes > 1:
           _to_repeat = meta_sampled
       elif _n_repeated <= self.n_repeat_classes:
@@ -109,7 +140,8 @@ class BalancedBatchSampler(data.Sampler):
 class LoaderConfig(object):
   def __init__(self, batch_size=None, class_size=None, sample_size=None,
                class_balanced=False, sort_in_batch=True, num_workers=2,
-               pin_memory=False, gpu_id='cpu'):
+               pin_memory=False, replacement=False, drop_last=False,
+               gpu_id='cpu'):
     """(batch_size) and (class_size, sample_size) are exclusive."""
     if batch_size is None:
       assert (class_size is not None) and (sample_size is not None)
@@ -121,6 +153,8 @@ class LoaderConfig(object):
     self.batch_size = batch_size
     self.class_size = class_size
     self.sample_size = sample_size
+    self.replacement = replacement
+    self.drop_last = drop_last
     self.device = 'cpu'
     self.non_blocking = False
 
@@ -154,6 +188,8 @@ class LoaderConfig(object):
           meta=metadata,
           batch_size=self.batch_size,
           n_repeat_classes=n_repeat_classes,
+          replacement=self.replacement,
+          drop_last=self.drop_last,
       )
     else:
       batch_sampler = BalancedBatchSampler(
@@ -161,6 +197,8 @@ class LoaderConfig(object):
           class_size=self.class_size,
           sample_size=self.sample_size,
           n_repeat_classes=n_repeat_classes,
+          replacement=self.replacement,
+          drop_last=self.drop_last,
       )
     return batch_sampler
 
@@ -173,9 +211,10 @@ class LoaderConfig(object):
         num_workers=self.num_workers,
         pin_memory=self.pin_memory,
     ))
+
     def loader():
       return Dataset(*_loader.next(), name).to(
-        device=self.device, non_blocking=self.non_blocking)
+          device=self.device, non_blocking=self.non_blocking)
     return loader
 
   def get_episode_loader(self, metadata, name):
@@ -187,10 +226,11 @@ class LoaderConfig(object):
         num_workers=self.num_workers,
         pin_memory=self.pin_memory,
     ))
+
     def loader():
       s = Dataset(*_loader.next(), 'Support')
       q = Dataset(*_loader.next(), 'Query')
       # import pdb; pdb.set_trace()
       return Episode(s, q, len(s.classwise), name).to(
-        device=self.device, non_blocking=self.non_blocking)
+          device=self.device, non_blocking=self.non_blocking)
     return loader

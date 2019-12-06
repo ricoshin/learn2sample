@@ -125,8 +125,9 @@ class LoopMananger():
     self.ready = ready
     self.ready_step = ready_step
     self.done = done
-    if train:
+    if self.unroll_steps is not None:
       self.n_trunc = math.ceil(self.inner_steps / self.unroll_steps)
+    if train:
       self.inner_scheduler = InnerStepScheduler(
           outer_steps=self.outer_steps,
           inner_steps=self.inner_steps,
@@ -134,14 +135,20 @@ class LoopMananger():
       )
     self.inner_step = 0
     self.outer_step = 0
+    self._next_episode = False
 
   def __iter__(self):
     for i in range(1, self.outer_steps + 1):
+      print(f'new_epi: {self.rank} / {self.train}')
       if self.train:
         inner_steps = self.inner_scheduler(i)
       else:
         inner_steps = self.inner_steps
       for j in range(1, inner_steps + 1):
+        if self._next_episode:
+          self._next_episode = False
+          utils.forkable_pdb().set_trace()
+          break
         if (self.train and self.ready[self.rank] is False and
             j == self.ready_step):
           self.ready[self.rank] = True  # get ready!
@@ -172,6 +179,9 @@ class LoopMananger():
 
   def log_step(self):
     return self.inner_step % self.log_steps == 0
+
+  def next_episode(self):
+    self._next_episode = True
 
 
 class Logger():

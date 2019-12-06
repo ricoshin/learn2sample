@@ -172,7 +172,7 @@ class Sampler(BaseModule):
     self.critic_hx = self.critic_hx.detach()
     self.critic_cx = self.critic_cx.detach()
 
-  def forward(self, state, eps=0.0):
+  def forward(self, state, eps=0.0, debug=False):
     # encoder
     if self.encoder is not None:
       encoded = self.encoder(state.meta_s)
@@ -197,7 +197,7 @@ class Sampler(BaseModule):
 
     # classwise linear
     x_classwise = self.classwise_linear(x_classwise_)
-    x_classwise = self.batch_norm(x_classwise)
+    # x_classwise = self.batch_norm(x_classwise)
     # x_classwise = (x_classwise - x_classwise.mean(0)).div(x_classwise.std(0))
     # utils.forkable_pdb().set_trace()
 
@@ -211,7 +211,7 @@ class Sampler(BaseModule):
     x_merged = x_classwise + x_global
     logits = self.actor_linear(x_merged)
     probs = F.softmax(logits, dim=1)
-    mask = self.sample_mask(probs, eps)
+    mask, collapsed = self.sample_mask(probs, eps, debug)
     log_probs = F.log_softmax(logits, dim=1)
     entropy = -(log_probs * probs).sum(1)
     log_probs = log_probs.gather(1, mask)
@@ -220,7 +220,11 @@ class Sampler(BaseModule):
         probs=probs,
         log_probs=log_probs,
         entropy=entropy,
+        collapsed=collapsed,
     ))
+
+    if torch.isnan(probs).any():
+      utils.forkable_pdb().set_trace()
 
     # value
     # utils.forkable_pdb().set_trace()
@@ -239,23 +243,40 @@ class Sampler(BaseModule):
   def random_mask(self, size):
     return (torch.ones(size) * 0.5).multinomial(1).data.to(self.device)
 
-  def sample_mask(self, probs, eps=0.1):
-    if random.uniform(0, 1) < eps or probs[:, 1].sum() == 0:
-      if probs[:, 1].sum() == 0:
-        print('Zero mask! Random_mask will be applied!')
-      mask = self.random_mask(probs.size())
-    else:
-      n_iter, max_iter = 0, 1000
-      while True:
-        n_iter += 1
-        mask = probs.multinomial(1).data
-        if n_iter >= max_iter:
-          print('Resampling number exceeded maximum iteration! '
-                'Random mask will be applied!')
-          mask = self.random_mask(probs.size())
-        if mask.sum() > 0:
-          break
-    return mask
+  def sample_mask(self, probs, eps_greedy=0.1, debug=False):
+    eps = 1e-8
+    collapsed = False
+    n_iter, max_iter = 0, 1000
+    while True:
+      n_iter += 1
+      if ((probs == 0).all() or (probs < 0).any() or
+          torch.isnan(probs).any() or torch.isinf(probs).any()):
+        if (probs == 0).all():
+          print('Zero Probs! Random_mask will be applied!')
+        elif (probs < 0).any().all():
+          print('Too low Probs! Random_mask will be applied!')
+        elif torch.isnan(probs).any():
+          print('Nan Probs! Random_mask will be applied!')
+        elif torch.isinf(probs).any():
+          print('Inf Probs! Random_mask will be applied!')
+        collapsed = True
+        mask = self.random_mask(probs.size())
+      elif random.uniform(0, 1):
+        mask = self.random_mask(probs.size())
+      elif (probs[:, 1] < eps).all():
+        print('Too small or large Mask! Random_mask will be applied!')
+        collapsed = True
+        mask = self.random_mask(probs.size())
+      else:
+        mask = probs.clamp(eps, 1 - eps).multinomial(1).data
+      if n_iter >= max_iter:
+        print('Resampling number exceeded maximum iteration! '
+              'Random mask will be applied!')
+        mask = self.random_mask(probs.size())
+        collapsed = True
+      if (mask > 0).any():
+        break
+    return mask, collapsed
 
   def save(self, save_path=None, file_name=None):
     if save_path:
@@ -291,7 +312,8 @@ class Sampler(BaseModule):
     for tar, (name, src) in zip(
       sampler_tar.parameters(), self.named_parameters()):
       if src.grad is None:
-        print(f'[!] {name} is not being used.')
+        # print(f'[!] {name} is not being used.')
+        pass
       else:
         tar._grad = src.grad.to(tar.device)
 

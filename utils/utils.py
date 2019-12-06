@@ -128,6 +128,9 @@ def prepare_config_and_dirs(args: argparse.Namespace):
     print('Debugging mode: single worker / volatile mode on.')
     cfg.args.workers = 1
     cfg.args.volatile = True
+  if cfg.args.no_valid:
+    cfg.btrl.no_valid = True
+    cfg.args.workers = 1
   # prepare directories if needed
   if not cfg.args.volatile:
     save_dir = os.path.join(cfg.dirs.result, cfg.args.config)
