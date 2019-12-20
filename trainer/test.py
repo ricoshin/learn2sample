@@ -27,7 +27,7 @@ def test(cfg, metadata, sampler):
 
   # loop manager
   m = LoopMananger(
-      train=False,
+      status=DotMap(dict(train=False)),
       outer_steps=cfg.steps.test.outer,
       inner_steps=cfg.steps.test.inner,
       log_steps=cfg.steps.test.log,
@@ -89,13 +89,10 @@ def test(cfg, metadata, sampler):
       sampler.zero_states()
       # test models
       stream = torch.cuda.Stream()
-      stream_base = torch.cuda.Stream() if cfg.ctrl.async_stream else stream
-      with torch.cuda.stream(stream):
-        test_result_dict.append(
-            test_on_query(env.model, env.meta_que, test_loader_cfg))
-      with torch.cuda.stream(stream_base):
-        test_result_dict.append(
-            test_on_query(env.model_base, env.meta_que, test_loader_cfg))
+      test_result_dict.append(
+        test_on_query(env.model, env.meta_que, test_loader_cfg))
+      test_result_dict.append(
+        test_on_query(env.model_base, env.meta_que, test_loader_cfg))
 
   result_frame.save_csv('overall', cfg.dirs.save.test)
   result_frame.save_final_lineplot('actual_loss', cfg.dirs.save.test)

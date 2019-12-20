@@ -26,13 +26,23 @@ _tensor_managers = {}
 _cuda_managers = {}
 _debuggers = {}
 _forkable_pdb = None
+_forkable_pdb_rank = None
 
 
-def forkable_pdb():
+def forkable_pdb(rank=None):
   global _forkable_pdb
   if _forkable_pdb is None:
-    _forkable_pdb = ForkablePdb()
-  return _forkable_pdb
+    _pdb = _forkable_pdb = ForkablePdb()
+    _forkable_pdb_rank = rank
+  else:
+    if _forkable_pdb == rank:
+      _pdb = _forkable_pdb
+    else:
+      class _dummy_pdb():
+        def set_trace():
+          return None
+      _pdb = _dummy_pdb
+  return _pdb
 
 
 def getSignalCatcher(name):
@@ -75,6 +85,28 @@ def get_optim(optim_name, *args, **kwargs):
   optim_name = {'sgd': 'SGD', 'rmsprop': 'RMSprop', 'adam': 'Adam'}[
       optim_name.lower()]
   return getattr(torch.optim, optim_name)(*args, **kwargs)
+
+
+def get_device(rank, gpu_ids, module_per_gpu):
+  def to_device(id):
+    return torch.device('cpu' if id == -1 else f'cuda:{id}')
+  if module_per_gpu:
+    n_modules = 3
+    start = (rank * n_modules) % len(gpu_ids)
+    end = ((rank * n_modules) + n_modules)
+    ids = gpu_ids[start:end]
+    return DotMap(dict(
+      sampler=to_device(ids[0]),
+      model=to_device(ids[1]),
+      model_base=to_device(ids[2]),
+      ))
+  else:
+    id = gpus_ids[rank % len(gpu_ids)]
+    return DotMap(dict(
+      sampler=to_device(id),
+      model=to_device(id),
+      model_base=to_device(id),
+      ))
 
 
 def set_logger(save_path):

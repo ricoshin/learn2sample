@@ -4,8 +4,6 @@ import torch
 import torch.nn as nn
 from dotmap import DotMap
 from loader.episode import Dataset, Episode
-from nn.output import ModelOutput
-from nn.sampler2 import MaskDist
 from torch.nn import functional as F
 from utils import utils
 from utils.helpers import weights_init, BaseModule, Flatten
@@ -65,8 +63,8 @@ class Model(BaseModule):
                  self.n_classes, self.auto_reset, self.preprocess
                  ).to(self.device)
 
-  def copy_state_from(self, sampler_src):
-    self.load_state_dict(sampler_src.state_dict())
+  def copy_state_from(self, model_src):
+    self.load_state_dict(model_src.state_dict())
     self.to(self.device)
     self.optim = self.optim_getter(self.parameters())
 
@@ -144,9 +142,11 @@ class Model(BaseModule):
 
     for name, layer in self.layers.items():
       if not name == 'fc_class':
-        x = layer(x)
-        if torch.isnan(x).any():
-          utils.forkable_pdb().set_trace()
+        x_ = layer(x)
+        # if torch.isnan(x_).any():
+        #   print(debug)
+          # utils.forkable_pdb().set_trace()
+        x = x_
 
     # utils.ForkablePdb().set_trace()
     n_samples = x.size(0)
@@ -159,8 +159,8 @@ class Model(BaseModule):
         labels=data.q.labels,
     )
 
-    if torch.isnan(cls_dist).any():
-      utils.forkable_pdb().set_trace()
+    # if torch.isnan(cls_dist).any():
+    #   utils.forkable_pdb().set_trace()
 
     loss = 0
     # fc-pulling

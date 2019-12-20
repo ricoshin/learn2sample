@@ -4,6 +4,7 @@ import pdb
 import sys
 import time
 from ctypes import c_bool
+from dotmap import DotMap
 
 import gin
 import torch
@@ -77,6 +78,7 @@ def main(cfg):
       embed_dim=cfg.model.embed_dim,
       rnn_dim=cfg.sampler.rnn_dim,
       mask_unit=cfg.sampler.mask_unit,
+      prob_clamp=cfg.sampler.prob_clamp,
       encoder=encoder,
   )
   if cfg.args.eval_dir:
@@ -86,11 +88,11 @@ def main(cfg):
   print('Loading a shared optimizer..')
   getter = OptimGetter(cfg.sampler.optim, lr=cfg.sampler.lr, shared=True)
   if cfg.sampler.encoder.reuse_model:
+    params = sampler.parameters()
+  else:
     params = [{'params': sampler.encoder_params()},
               {'params': sampler.non_encoder_params(),
                'lr': cfg.sampler.encoder.lr}]
-  else:
-    params = sampler.parameters()
   optim = getter(params)
 
   sampler.share_memory()
@@ -98,6 +100,12 @@ def main(cfg):
   ##############################################################################
   if not (len(cfg.args.gpu_ids) == 1 and cfg.args.gpu_ids[0] == -1):
     mp.set_start_method('spawn')  # just for GPUs
+
+  # multi-GPU for one enviroment
+  if cfg.ctrl.module_per_gpu:
+    cfg.args.workers = len(cfg.args.gpu_ids) // 3
+    cfg.args.gpu_ids = cfg.args.gpu_ids[:cfg.args.workers * 3]
+    print(f'Module-based deploy. workers={cfg.args.workers}.')
 
   if cfg.ctrl.no_valid:
     n_train_workers = cfg.args.workers
@@ -127,29 +135,33 @@ def main(cfg):
       p = mp.Process(
           target=train,
           kwargs=dict(
-              mode='train',
               cfg=cfg,
-              rank=rank,
-              ready=ready,
-              done=done,
               metadata=meta_train,
               shared_sampler=sampler,
               shared_optim=optim,
-              ready_step=ready_step[rank] + 1,
+              status=DotMap(dict(
+                mode='train',
+                rank=rank,
+                ready=ready,
+                done=done,
+                ready_step=ready_step[rank] + 1,
+              )),
           ))
     else:
       # validation process (single)
       p = mp.Process(
           target=train,
           kwargs=dict(
-              mode='valid',
               cfg=cfg,
-              rank=rank,
-              ready=ready,
-              done=done,
               metadata=meta_valid,
               shared_sampler=sampler,
               shared_optim=optim,
+              status=DotMap(dict(
+                mode='valid',
+                rank=rank,
+                ready=ready,
+                done=done,
+              )),
           ))
     ##############################################################################
     p.start()

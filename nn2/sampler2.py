@@ -89,11 +89,12 @@ class Sampler(BaseModule):
   """A Sampler module incorporating all other submodules."""
   _save_name = 'meta.params'
 
-  def __init__(self, embed_dim, rnn_dim, mask_unit, encoder=None):
+  def __init__(self, embed_dim, rnn_dim, mask_unit, prob_clamp, encoder=None):
     super(Sampler, self).__init__()
     self.embed_dim = embed_dim
     self.rnn_dim = rnn_dim
     self.mask_unit = mask_unit
+    self.prob_clamp = prob_clamp
     self.encoder = encoder
     # [loss, acc, dist] x [value, mean, var, skew, kurt] (batch_sz: n_class)
     classwise_input_dim = 3 * 5
@@ -175,10 +176,11 @@ class Sampler(BaseModule):
   def forward(self, state, eps=0.0, debug=False):
     # encoder
     if self.encoder is not None:
-      encoded = self.encoder(state.meta_s)
+      encoded = self.encoder(state.meta_s.to(self.device))
       embed = encoded.embed
       # encoder_loss = F.mse_loss(encoded.embed, state.embed.detach())
     else:
+      encoded = state
       embed = None
       # TODO: encoded=? when self.encoder is None
 
@@ -210,7 +212,8 @@ class Sampler(BaseModule):
     # action
     x_merged = x_classwise + x_global
     logits = self.actor_linear(x_merged)
-    probs = F.softmax(logits, dim=1)
+    probs = F.softmax(logits, dim=1).clamp(
+      0 + self.prob_clamp, 1 - self.prob_clamp)
     mask, collapsed = self.sample_mask(probs, eps, debug)
     log_probs = F.log_softmax(logits, dim=1)
     entropy = -(log_probs * probs).sum(1)
@@ -261,7 +264,7 @@ class Sampler(BaseModule):
           print('Inf Probs! Random_mask will be applied!')
         collapsed = True
         mask = self.random_mask(probs.size())
-      elif random.uniform(0, 1):
+      elif random.uniform(0, 1) < eps_greedy:
         mask = self.random_mask(probs.size())
       elif (probs[:, 1] < eps).all():
         print('Too small or large Mask! Random_mask will be applied!')
@@ -301,8 +304,16 @@ class Sampler(BaseModule):
     return self
 
   def new(self):
+    if self.encoder is not None:
+      encoder = self.encoder.new()
+    else:
+      encoder = None
     return Sampler(
-        self.embed_dim, self.rnn_dim, self.mask_unit, self.encoder.new())
+        embed_dim=self.embed_dim,
+        rnn_dim=self.rnn_dim,
+        mask_unit=self.mask_unit,
+        prob_clamp=self.prob_clamp,
+        encoder=encoder)
 
   def copy_state_from(self, sampler_src, non_blocking=False):
     self.load_state_dict(sampler_src.state_dict())
@@ -323,7 +334,7 @@ class Sampler(BaseModule):
     return self.encoder.parameters()
 
   def non_encoder_params(self):
-    return iter([p for n, p in self.named_parameters() if 'encoder' in n])
+    return iter([p for n, p in self.named_parameters() if 'encoder' not in n])
 
   def cuda_parallel_(self, dict_, parallel):
     if parallel:

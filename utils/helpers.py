@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from loader.episode import Episode
 from loader.metadata import Metadata
-from nn.output import ModelOutput
+# from nn.output import ModelOutput
 from utils import shared_optim, utils
 
 
@@ -110,24 +110,23 @@ class InnerStepScheduler():
 
 class LoopMananger():
   def __init__(
-    self, train, outer_steps, inner_steps, log_steps, unroll_steps=None,
-    query_steps=None, anneal_steps=None, rank=None, ready=None, ready_step=None,
-    done=None):
+    self, status, outer_steps, inner_steps, log_steps, unroll_steps=None,
+    query_steps=None, anneal_steps=None):
     # TODO: too many None..
-    self.train = train  # boolean
+    self.train = True if status.mode == 'train' else False  # boolean
     self.outer_steps = outer_steps
     self.inner_steps = inner_steps
     self.log_steps = log_steps
     self.unroll_steps = unroll_steps
     self.query_steps = query_steps
     self.anneal_steps = anneal_steps
-    self.rank = rank
-    self.ready = ready
-    self.ready_step = ready_step
-    self.done = done
+    self.rank = status.rank
+    self.ready = status.ready
+    self.ready_step = status.ready_step
+    self.done = status.done
     if self.unroll_steps is not None:
       self.n_trunc = math.ceil(self.inner_steps / self.unroll_steps)
-    if train:
+    if self.train:
       self.inner_scheduler = InnerStepScheduler(
           outer_steps=self.outer_steps,
           inner_steps=self.inner_steps,
@@ -139,7 +138,7 @@ class LoopMananger():
 
   def __iter__(self):
     for i in range(1, self.outer_steps + 1):
-      print(f'new_epi: {self.rank} / {self.train}')
+      # print(f'new_epi: {self.rank} / {self.train}')
       if self.train:
         inner_steps = self.inner_scheduler(i)
       else:
@@ -238,10 +237,10 @@ class Logger():
       # import pdb; pdb.set_trace()
     self._log += f'[{"|".join(out_str)}]'
 
-  def outputs(self, outputs, print_conf):
-    assert isinstance(outputs, (list, tuple))
-    ###########################################################
-    from nn.reinforcement import Policy
-    assert(all([isinstance(out, (ModelOutput, Policy)) for out in outputs]))
-    ###################################################################
-    self._log += "".join([out.to_text(print_conf) for out in outputs])
+  # def outputs(self, outputs, print_conf):
+  #   assert isinstance(outputs, (list, tuple))
+  #   ###########################################################
+  #   from nn.reinforcement import Policy
+  #   assert(all([isinstance(out, (ModelOutput, Policy)) for out in outputs]))
+  #   ###################################################################
+  #   self._log += "".join([out.to_text(print_conf) for out in outputs])

@@ -32,7 +32,6 @@ class Environment(object):
     self.loader_cfg = loader_cfg
     self.data_split_method = data_split_method
     self.mask_unit = mask_unit
-    self.async_stream = async_stream
     self.sync_baseline = sync_baseline
     self.query_track = query_track
     self.max_action_collapsed = max_action_collapsed
@@ -41,13 +40,13 @@ class Environment(object):
     self.meta_sup, self.meta_que = metadata.split(data_split_method)
     self.device = 'cpu'
 
-  def to(self, device, non_blocking=False):
-    self.device = device
-    self.model = self.model.to(device, non_blocking=non_blocking)
-    self.model_base = self.model_base.to(device, non_blocking=non_blocking)
+  def to(self, device1, device2, non_blocking=False):
+    self.device = device1, device2
+    self.model = self.model.to(device1, non_blocking=non_blocking)
+    self.model_base = self.model_base.to(device2, non_blocking=non_blocking)
     return self
 
-  def reset(self):
+  def reset(self, status=None):
     """Reset environment(the dataloaders and the model).
     """
     self.meta_s_loader = self.meta_sup.episode_loader(self.loader_cfg)
@@ -60,16 +59,16 @@ class Environment(object):
     self.action_collapsed = 0
     # self.meta_q = self.meta_q_loader()
     # utils.ForkablePdb().set_trace()
-    return self(action=None)  # return state only
+    return self(action=None, status=status)  # return state only
 
   def get_mask_with_sparsity(self, mask, sparsity):
     n_ones = int(len(mask) * sparsity)
     n_zeros = len(mask) - n_ones
     mask_new = [0] * n_zeros + [1] * n_ones
     random.shuffle(mask_new)
-    return torch.tensor(mask_new).to(mask.device)
+    return torch.tensor(mask_new).to(mask.device[1])
 
-  def __call__(self, action=None, loop_manager=None):
+  def __call__(self, action=None, loop_manager=None, status=None):
     """Simulate one action and return reward and next state.
       Args:
         action: instance/class selection mask
@@ -88,11 +87,11 @@ class Environment(object):
       meta_s_base = self.meta_s
     else:
       # mask: ours
-      mask = action.mask
+      mask = action.mask.to(self.device[0])
       sparsity = (mask == 1.).sum().float() / len(mask)
       info.ours.mask_sp = sparsity
       # mask: baseline
-      mask_base = torch.ones(mask.size())  # all-one base
+      mask_base = torch.ones(mask.size()).to(self.device[1])  # all-one base
       # mask_base = self.get_mask_with_sparsity(mask, sparsity)
       # TODO: cannot mask out base_mask for mse_loss btn sampler embedding
       sparsity_base = (mask_base == 1.).sum().float() / len(mask_base)
@@ -105,41 +104,64 @@ class Environment(object):
         meta_s = self.meta_s.classwise.masked_select(mask)
         meta_s_base = self.meta_s.classwise.masked_select(mask_base)
 
-    stream = torch.cuda.Stream()
-    stream_base = torch.cuda.Stream() if self.async_stream else stream
+    meta_s = meta_s.to(self.device[0])
+    meta_s_base = meta_s_base.to(self.device[1])
+
+    # stream = torch.cuda.Stream()
+    # stream_base = torch.cuda.Stream() if self.async_stream else stream
+
+    # if debug:
+    #   def p_ours():
+    #     return [p for p in self.model.parameters()][0]
+    #   def p_base():
+    #     return [p for p in self.model_base.parameters()][0]
+    #   utils.forkable_pdb().set_trace()
+    # else:
+    #   debug = f'{m.rank}_' if m else 'unknown_rank_'
+    #   debug += f'train_' if m and m.train else 'valid_'
+    # debug = f'{m.inner_step}_{m.outer_step}' if m else 'unknown_step_'
+    def debug(state):
+      if torch.isnan(state.loss):
+        print(status)
+        if m:
+          print(m.outer_step, m.inner_step)
+        else:
+          print('no m')
+        utils.forkable_pdb(status.rank).set_trace()
+    # if status.mode == 'valid':
+    #   utils.forkable_pdb(status.rank).set_trace()
 
     with torch.enable_grad():
       # train (model)
-      with torch.cuda.stream(stream):
-        self.model.train()
-        if meta_s is None:
-          utils.forkable_pdb().set_trace()
-        state = self.model(data=meta_s, debug=m and m.rank == 0)
-        # utils.ForkablePdb().set_trace()
-        self.model.zero_grad()
-        state.loss.backward()
-        self.model.optim.step()
-        info.ours.s = state
+      self.model.train()
+      if meta_s is None:
+        utils.forkable_pdb().set_trace()
+      state = self.model(data=meta_s)
+      # debug(state)
+      self.model.zero_grad()
+      state.loss.backward()
+      self.model.optim.step()
+      info.ours.s = state
 
       # train (baseline)
-      with torch.cuda.stream(stream_base):
-        #   baseline has to be used just for reward generation,
-        #   not for state generation as we don't want to keep it at test time.
-        self.model_base.train()
-        state_base = self.model_base(data=meta_s_base)
-        self.model_base.zero_grad()
-        state_base.loss.backward()
-        self.model_base.optim.step()
-        info.base.s = state_base
+      #   baseline has to be used just for reward generation,
+      #   not for state generation as we don't want to keep it at test time.
+      self.model_base.train()
+      state_base = self.model_base(data=meta_s_base)
+      # debug(state_base)
+      self.model_base.zero_grad()
+      state_base.loss.backward()
+      self.model_base.optim.step()
+      info.base.s = state_base
+      # print(status.rank)
 
     if self.query_track:
       with torch.no_grad():
         meta_q = self.meta_q_loader()
-        with torch.cuda.stream(stream):
-          info.ours.qt = self.model(data=meta_q)
-        with torch.cuda.stream(stream_base):
-          info.base.qt = self.model_base(data=meta_q)
-
+        info.ours.qt = self.model(data=meta_q)
+        debug(info.ours.qt)
+        info.base.qt = self.model_base(data=meta_q.to(self.device[1]))
+        debug(info.base.qt)
     # state (one-step-ahead input for sampler)
     self.meta_s = self.meta_s_loader()
     state.meta_s = self.meta_s
@@ -148,7 +170,7 @@ class Environment(object):
       return state
 
     # initial reward
-    reward = torch.tensor([0.]).to(self.device)
+    reward = torch.tensor([0.]).to(self.device[0])
     # Reward: horizon & sparsity reward (dense)
     reward -= 0.1  # long horizon penalty
     # (meaningless if there's no terminal state)
@@ -162,10 +184,9 @@ class Environment(object):
         # test (model & baseline)
         for _ in range(m.query_steps):  # TODO: as cfg
           meta_q = self.meta_q_loader()
-          with torch.cuda.stream(stream):
-            acc.append(self.model(data=meta_q).cls_acc.float().mean())
-          with torch.cuda.stream(stream_base):
-            acc_base.append(self.model_base(data=meta_q).cls_acc.float().mean())
+          acc.append(self.model(data=meta_q).cls_acc.float().mean())
+          acc_base.append(self.model_base(
+            data=meta_q.to(self.device[1])).cls_acc.float().mean())
       # Reward: self performance gain
       acc = sum(acc) / len(acc)
       info.ours.q.acc = acc
@@ -186,7 +207,7 @@ class Environment(object):
       reward += rel_gain
       # Reward: sparsity
       if rel_gain > 0:
-        sp_reward = (1 - sparsity**2) * 0.1
+        sp_reward = (1 - sparsity**2) * 0.1 *0
         info.r.sparsity = sp_reward
         reward += sp_reward
       else:

@@ -4,9 +4,9 @@ dirs:
   result: result
 
 ctrl:
+  module_per_gpu: True
   diverse_start: True
   sync_baseline: True
-  async_stream: True
   no_valid: False  # for debugging
   no_log: False
   q_track:
@@ -20,7 +20,7 @@ steps:
   inner:
     max: 500
     unroll: 50
-    log: 25
+    log: 50
     query: 50
   test:
     outer: 5
@@ -49,18 +49,19 @@ model:
 
 sampler:
   lr: 0.001
-  grad_norm: 40
+  grad_norm: 10
   rnn_dim: 256
   optim: adam  # adam / rmsprop
   mask_unit: class  # sample / class
   input_more: True
   output_more: True
+  prob_clamp: 0.001
   temp: 1.0
   eps: 0.1  # epsilon-greedy
   encoder:
     reuse_model: False
-    lr: 0.01
-    channels: [64, 64]
+    lr: 0.001
+    channels: [128, 128]
     kernels: [3, 3]
 
 rl:

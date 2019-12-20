@@ -15,7 +15,6 @@ from loader.metadata import Metadata
 from nn2.environment import Environment
 from nn2.model import Model
 from nn2.sampler2 import Sampler
-from nn.output import ModelOutput
 from setproctitle import setproctitle as ptitle
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.tensorboard import SummaryWriter
@@ -32,25 +31,29 @@ C = utils.getCudaManager('default')
 logger = Logger()
 
 
-def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
-          shared_optim=None, ready_step=None):
+def train(cfg, status, metadata, shared_sampler, shared_optim):
   ##############################################################################
   def debug():
     if rank == 0:
       return utils.ForkablePdb().set_trace()
   ##############################################################################
-  assert mode in ['train', 'valid']
-  train = True if mode == 'train' else False
-  gpu_id = cfg.args.gpu_ids[rank % len(cfg.args.gpu_ids)]
-  device = 'cpu' if gpu_id == -1 else f'cuda:{gpu_id}'
-  ptitle(f'RL-Evironment|MODE:{mode}|RANK:{rank}|GPU_ID:{device}')
-  C.set_cuda(gpu_id >= 0)
-  torch.cuda.set_device(gpu_id)
-  utils.random_seed(cfg.args.seed + rank)
+  assert status.mode in ['train', 'valid']
+  train = True if status.mode == 'train' else False
+  device = utils.get_device(
+    status.rank, cfg.args.gpu_ids, cfg.ctrl.module_per_gpu)
+  # gpu_id = cfg.args.gpu_ids[status.rank % len(cfg.args.gpu_ids)]
+  # device = 'cpu' if gpu_id == -1 else f'cuda:{gpu_id}'
+  title = f'Env|Mode:{status.mode}|Rank:{status.rank}'
+  print(title)
+  ptitle(title)
+
+  # C.set_cuda(gpu_id >= 0)
+  # torch.cuda.set_device(gpu_id)
+  utils.random_seed(cfg.args.seed + status.rank)
   ##############################################################################
-  sampler = shared_sampler.new().to(device, non_blocking=True)
+  sampler = shared_sampler.new().to(device.sampler, non_blocking=True)
   model, env = initialize(cfg, metadata, device)
-  state = env.reset()
+  state = env.reset(status=status)
   ##############################################################################
   # TF writer
   if not train:
@@ -61,10 +64,10 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
   # ready for agents standing at different phase of episode
   if not train:
     print('\nWaiting for all the agents to get ready..')
-    while not all(ready):
+    while not all(status.ready):
       time.sleep(1)  # idling
-      status = ['O' if r is True else 'X' for r in ready]
-      print(f'Ready: [ {" | ".join(status)} ]', end='\r')
+      ready = ['O' if r is True else 'X' for r in status.ready]
+      print(f'Ready: [ {" | ".join(ready)} ]', end='\r')
     print('\nReady to go. Start training..\n')
     print(f'[Class] S: {len(env.meta_sup)} | Q: {len(env.meta_que)} | '
           f'class_balanced: {cfg.loader.class_balanced}')
@@ -73,11 +76,7 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
   torch.set_grad_enabled(train)
   # loop manager
   m = LoopMananger(
-      train=train,
-      done=done,
-      rank=rank,
-      ready=ready,
-      ready_step=ready_step,
+      status=status,
       outer_steps=cfg.steps.outer.max,
       inner_steps=cfg.steps.inner.max,
       log_steps=cfg.steps.inner.log,
@@ -89,8 +88,8 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
   ##############################################################################
   for outer_step, inner_step in m:
     if m.start_of_episode() or m.start_of_unroll():
-      if m.start_of_episode():
-        print(f'start epi: {rank}')
+      # if m.start_of_episode():
+        # print(f'start epi: {status.rank}')
       # if train or (not train and m.start_of_episode()):
       # copy from shared memory
       if not train:
@@ -108,17 +107,18 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
     # RL step
     eps = cfg.sampler.eps if train else 0
     action, value, embed_sampler = sampler(state, eps, debug=not train)
-    state, reward, info, terminal = env(action, loop_manager=m)
-    # sampler encoder loss
-    embed_model = info.base.s.embed
-    loss_encoder += F.mse_loss(embed_sampler, embed_model.detach())
+    state, reward, info, terminal = env(action, loop_manager=m, status=status)
+    if not cfg.sampler.encoder.reuse_model:
+      # sampler encoder loss
+      embed_model = info.base.s.embed
+      loss_encoder += F.mse_loss(embed_sampler, embed_model.detach().to(device.sampler))
     # record results
     actions.append(action)
     values.append(value)
     rewards.append(reward)
     ############################################################################
-    if ((not train and m.log_step()) or
-       ((cfg.ctrl.no_valid or rank == 0) and m.log_step())):
+    if not cfg.ctrl.no_log and m.log_step() and (not train or
+       (cfg.ctrl.no_valid and status.rank == 0)):
     # if rank == 0 and inner_step % 10 == 0:
       print(f'\n[Dir] {cfg.dirs.save.top}')
       print(f'[Step] outer: {outer_step:4d} | inner: {inner_step:4d}')
@@ -139,8 +139,12 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
         print(f'[Base (Qt)] loss(act): {info.base.qt.loss:6.3f} | '
               f'loss: {info.ours.qt.cls_loss.mean():6.3f} | '
               f'acc: {info.base.qt.cls_acc.float().mean():6.3f}')
-      probs = ' | '.join([f'{p:6.3f}' for p in action.probs[:6, 1].tolist()])
-      print(f'[RL] action(p[:6]): {probs}')
+      probs = [f'{p:6.3f}' for p in action.probs[:, 1].tolist()[:10]]
+      mask = ['   O  ' if m == 1 else '   X  '
+              for m in action.mask.squeeze().tolist()[:10]]
+      # probs = ' | '.join([f'{p:6.3f}' for p in action.mask.tolist()])
+      print(f'[RL] action(p[:{len(probs)}]): {" | ".join(probs)}')
+      print(f'[RL] action(m[:{len(mask)}]): {" | ".join(mask)}')
       print(f'[RL] reward: {reward:6.3f} | value: {value:6.3f}\n')
 
 
@@ -148,7 +152,7 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
       continue  # keep stacking action/value/reward
 
     if terminal or m.end_of_episode():
-      R = torch.tensor(0).to(device)
+      R = torch.tensor(0).to(device.sampler)
     else:
       R = sampler(state)[1]
     values.append(R.detach())  # For GAE
@@ -187,11 +191,13 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
     loss_policy = loss_policy / len(rewards)
     loss_encoder = loss_encoder / len(rewards)
 
-    if train and all(ready):
+    if train and all(status.ready):
       # update global sampler
       sampler.zero_grad()
       # utils.forkable_pdb().set_trace()
-      loss_total = loss_value + loss_encoder + loss_policy
+      loss_total = loss_value + loss_policy
+      if not cfg.sampler.encoder.reuse_model:
+        loss_total += loss_encoder
       # if loss_encoder < 1.0:
         # loss_total += loss_policy
       loss_total.backward()
@@ -221,12 +227,14 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
               f'value: {loss_value:6.3f} | '
               f'encoder: {loss_encoder:6.3f} | '
               f'entropy: {entropy:6.3f}')
-        try:
-          print(f'[Info] self_gain: {info.r.self_gain:6.3f} | '
-                f'rel_gain: {info.r.rel_gain:6.3f} | '
-                f'sp: {info.r.sparsity:6.3f}')
-        except:
-          print(info.r.self_gain, info.r.rel_gain, info.r.sparsity)
+        print(f'[Info] self_gain: {info.r.self_gain:6.3f} | '
+              f'rel_gain: {info.r.rel_gain:6.3f} | '
+              f'sp: {info.r.sparsity:6.3f}')
+          # print(info.r.self_gain, info.r.rel_gain, info.r.sparsity)
+        e_s = ' | '.join([f'{e:6.3f}' for e in embed_sampler[0, :10].tolist()])
+        e_m = ' | '.join([f'{e:6.3f}' for e in embed_model[0, :10].tolist()])
+        print(f'[Encoder] sampler: {e_s}')
+        print(f'[Encoder] model:   {e_m}')
         print(f'[Model_Acc(Q)] ours_prev: {info.ours.q.acc_prev:6.3f} | '
               f'ours: {info.ours.q.acc:6.3f} | base: {info.base.q.acc:6.3f}')
         print(f'[Reward] avg_truc: {reward_trunc_avg:6.3f} | '
@@ -259,7 +267,7 @@ def train(mode, cfg, rank, ready, done, metadata, shared_sampler=None,
       if terminal:
         print(f'[!] Terminal state: {rank}.')
         m.next_episode()
-      state = env.reset()
+      state = env.reset(status)
       sampler.zero_states()
 
   ##############################################################################
@@ -276,7 +284,7 @@ def initialize(cfg, metadata, device):
         sample_size=cfg.loader.sample_size,
         num_workers=cfg.loader.num_workers,
         pin_memory=cfg.loader.pin_memory,
-    ).to(device, non_blocking=True)
+    ).to(device.model, non_blocking=True)
     batch_size = cfg.loader.class_size * cfg.loader.sample_size
   else:
     # typical uniform sampling
@@ -285,7 +293,7 @@ def initialize(cfg, metadata, device):
         batch_size=cfg.loader.batch_size,
         num_workers=cfg.loader.num_workers,
         pin_memory=cfg.loader.pin_memory,
-    ).to(device, non_blocking=True)
+    ).to(device.model, non_blocking=True)
     batch_size = cfg.loader.batch_size
   # model (belongs to enviroment)
   model = Model(
@@ -293,11 +301,11 @@ def initialize(cfg, metadata, device):
       embed_dim=cfg.model.embed_dim,
       channels=cfg.model.channels,
       kernels=cfg.model.kernels,
-      distance_type=cfg.model.distance_type,
+      distance_type= cfg.model.distance_type,
       fc_pulling=cfg.model.fc_pulling,
       optim_getter=OptimGetter(cfg.model.optim, lr=cfg.model.lr),
       n_classes=len(metadata),
-  ).to(device, non_blocking=True)
+  )#.to(device.model, non_blocking=True)
   # environment
   env = Environment(
       model=model,
@@ -309,6 +317,6 @@ def initialize(cfg, metadata, device):
       sync_baseline=cfg.ctrl.sync_baseline,
       query_track=cfg.ctrl.q_track.train,
       max_action_collapsed=cfg.rl.max_action_collapsed,
-  ).to(device, non_blocking=True)
+  ).to(device.model, device.model_base, non_blocking=True)
 
   return model, env
