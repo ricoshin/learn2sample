@@ -1,1 +1,2 @@
-CUDA_VISIBLE_DEVICES=2 python train2.py --volatile
+
+python main.py --workers 2 --gpu_ids 0 1
