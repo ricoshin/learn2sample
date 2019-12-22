@@ -20,7 +20,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.tensorboard import SummaryWriter
 from utils import utils
 from utils.color import Color
-from utils.helpers import Logger, LoopMananger, OptimGetter
+from utils.helpers import Logger, LoopManager, OptimGetter
 from utils.result import ResultDict, ResultFrame
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
@@ -32,11 +32,11 @@ logger = Logger()
 
 
 def train(cfg, status, metadata, shared_sampler, shared_optim):
-  ##############################################################################
+  ###############################################################
   def debug():
     if rank == 0:
       return utils.ForkablePdb().set_trace()
-  ##############################################################################
+  ###############################################################
   assert status.mode in ['train', 'valid']
   train = True if status.mode == 'train' else False
   device = utils.get_device(
@@ -50,11 +50,11 @@ def train(cfg, status, metadata, shared_sampler, shared_optim):
   # C.set_cuda(gpu_id >= 0)
   # torch.cuda.set_device(gpu_id)
   utils.random_seed(cfg.args.seed + status.rank)
-  ##############################################################################
+  ################################################################
   sampler = shared_sampler.new().to(device.sampler, non_blocking=True)
   model, env = initialize(cfg, metadata, device)
   state = env.reset(status=status)
-  ##############################################################################
+  ################################################################
   # TF writer
   if not train:
     print(f'Save tfrecords: {cfg.dirs.save.tfrecord}')
@@ -75,7 +75,7 @@ def train(cfg, status, metadata, shared_sampler, shared_optim):
           f'batch_size: {cfg.loader.batch_size}\n')
   torch.set_grad_enabled(train)
   # loop manager
-  m = LoopMananger(
+  m = LoopManager(
       status=status,
       outer_steps=cfg.steps.outer.max,
       inner_steps=cfg.steps.inner.max,
@@ -84,9 +84,9 @@ def train(cfg, status, metadata, shared_sampler, shared_optim):
       query_steps=cfg.steps.inner.query,
       anneal_steps=cfg.steps.outer.anneal,
   )
-  ##############################################################################
-  ##############################################################################
-  for outer_step, inner_step in m:
+  #################################################################
+  #################################################################
+  for outer_step, inner_step in m:    
     if m.start_of_episode() or m.start_of_unroll():
       # if m.start_of_episode():
         # print(f'start epi: {status.rank}')
@@ -103,20 +103,23 @@ def train(cfg, status, metadata, shared_sampler, shared_optim):
         loss_value_total = 0
         loss_encoder_total = 0
 
-    ############################################################################
+    ###############################################################
     # RL step
     eps = cfg.sampler.eps if train else 0
     action, value, embed_sampler = sampler(state, eps, debug=not train)
-    state, reward, info, terminal = env(action, loop_manager=m, status=status)
+    state, reward, info, terminal = env(action, 
+                                        loop_manager=m, 
+                                        status=status)
     if not cfg.sampler.encoder.reuse_model:
       # sampler encoder loss
       embed_model = info.base.s.embed
-      loss_encoder += F.mse_loss(embed_sampler, embed_model.detach().to(device.sampler))
+      loss_encoder += F.mse_loss(embed_sampler, 
+                                 embed_model.detach().to(device.sampler))
     # record results
     actions.append(action)
     values.append(value)
     rewards.append(reward)
-    ############################################################################
+    ###############################################################
     if not cfg.ctrl.no_log and m.log_step() and (not train or
        (cfg.ctrl.no_valid and status.rank == 0)):
     # if rank == 0 and inner_step % 10 == 0:
@@ -162,7 +165,7 @@ def train(cfg, status, metadata, shared_sampler, shared_optim):
     if cfg.rl.gae:
       gae = torch.tensor(0.).to(device)
 
-    ############################################################################
+    #################################################################
     # Backtracing
     for i in reversed(range(len(rewards))):
       # utils.ForkablePdb().set_trace()
@@ -185,7 +188,7 @@ def train(cfg, status, metadata, shared_sampler, shared_optim):
         # utils.ForkablePdb().set_trace()
         entropy = actions[i].entropy.sum()
         loss_policy = loss_policy - gae.data * log_probs - 0.000001 * entropy
-    ############################################################################
+    #################################################################
     # loss averaged by step number
     loss_value = loss_value / len(rewards)
     loss_policy = loss_policy / len(rewards)
@@ -270,8 +273,8 @@ def train(cfg, status, metadata, shared_sampler, shared_optim):
       state = env.reset(status)
       sampler.zero_states()
 
-  ##############################################################################
-  ##############################################################################
+  #################################################################
+  #################################################################
   return None
 
 

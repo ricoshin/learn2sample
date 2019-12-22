@@ -101,7 +101,7 @@ def get_device(rank, gpu_ids, module_per_gpu):
       model_base=to_device(ids[2]),
       ))
   else:
-    id = gpus_ids[rank % len(gpu_ids)]
+    id = gpu_ids[rank % len(gpu_ids)]
     return DotMap(dict(
       sampler=to_device(id),
       model=to_device(id),

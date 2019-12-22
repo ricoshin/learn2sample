@@ -24,24 +24,29 @@ DEVKIT_DIR = '/v9/whshin/imagenet/ILSVRC2012_devkit_t12'
 C = utils.getCudaManager('default')
 
 parser = argparse.ArgumentParser(description='Learning to sample')
-parser.add_argument('--cpu', action='store_true', help='disable CUDA')
-parser.add_argument('--volatile', action='store_true', help='no saved files.')
+parser.add_argument('--cpu', action='store_true', 
+                    help='disable CUDA')
+parser.add_argument('--volatile', action='store_true', 
+                    help='no saved files.')
 parser.add_argument('--config_dir', type=str, default='config',
                     help='directory name that contains YAML files.')
 parser.add_argument('--config', type=str, default='default',
                     help='YAML filename to load configuration.')
 parser.add_argument('--parallel', action='store_true',
                     help='use torh.nn.DataParallel')
-parser.add_argument('--visible_devices', nargs='+', type=int, default=None,
+parser.add_argument('--visible_devices', nargs='+', type=int, 
+                    default=None,
                     help='for the environment variable: CUDA_VISIBLE_DEVICES')
-parser.add_argument('--seed', type=int, default=1, help='set random seed.')
+parser.add_argument('--seed', type=int, default=1, 
+                    help='set random seed.')
 parser.add_argument('--workers', type=int, default=32,
                     help='number of traing precesses.')
 parser.add_argument('--gpu_ids', type=int, default=[-1], nargs='+',
                     help='GPU to use. (use CPU if -1)')
 parser.add_argument('--gpu_all', action='store_true',
                     help='Use all the GPUs currently available.')
-parser.add_argument('--debug', action='store_true', help='debug mode on.')
+parser.add_argument('--debug', action='store_true', 
+                    help='debug mode on.')
 parser.add_argument('--eval_dir', type=str, default='',
                     help='path to learned parameter for evaluation.')
 parser.add_argument('--no_valid', action='store_true',
@@ -95,14 +100,18 @@ def main(cfg):
                'lr': cfg.sampler.encoder.lr}]
   optim = getter(params)
 
+  # allows data to go into a state where any process can use it directly
+  # so passing that data as argument to different processes won't make
+  # copy of that data
   sampler.share_memory()
   optim.share_memory()
   ##############################################################################
   if not (len(cfg.args.gpu_ids) == 1 and cfg.args.gpu_ids[0] == -1):
     mp.set_start_method('spawn')  # just for GPUs
 
-  # multi-GPU for one enviroment
-  if cfg.ctrl.module_per_gpu:
+  # Divide one thread to 3 modules (env, sampler, model)
+  # Assign each module to each gpu
+  if cfg.ctrl.module_per_gpu: 
     cfg.args.workers = len(cfg.args.gpu_ids) // 3
     cfg.args.gpu_ids = cfg.args.gpu_ids[:cfg.args.workers * 3]
     print(f'Module-based deploy. workers={cfg.args.workers}.')
@@ -121,7 +130,7 @@ def main(cfg):
   # status
   ready_step = list(reversed(range(0, cfg.steps.inner.max, trunc_size)))
   ready = [False if cfg.ctrl.diverse_start else True]
-  # import pdb; pdb.set_trace()
+
   ready = mp.Array(c_bool, ready * n_train_workers)
   done = mp.Value(c_bool, False)
   ##############################################################################

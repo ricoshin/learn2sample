@@ -108,7 +108,7 @@ class InnerStepScheduler():
     return cur_inner_steps
 
 
-class LoopMananger():
+class LoopManager():
   def __init__(
     self, status, outer_steps, inner_steps, log_steps, unroll_steps=None,
     query_steps=None, anneal_steps=None):
@@ -135,10 +135,15 @@ class LoopMananger():
     self.inner_step = 0
     self.outer_step = 0
     self._next_episode = False
+    print(f'[outer steps]: {outer_steps}, [inner steps]: {inner_steps}'
+          f'[log steps]: {log_steps}, [unroll steps]: {unroll_steps}'
+          f'[query steps]: {query_steps}, [anneal steps]: {anneal_steps}'
+          f'[num trunc]: {self.n_trunc}, [rank]: {self.rank}, ')
 
   def __iter__(self):
     for i in range(1, self.outer_steps + 1):
       # print(f'new_epi: {self.rank} / {self.train}')
+
       if self.train:
         inner_steps = self.inner_scheduler(i)
       else:

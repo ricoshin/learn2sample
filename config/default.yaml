@@ -4,10 +4,10 @@ dirs:
   result: result
 
 ctrl:
-  module_per_gpu: True
+  module_per_gpu: False
   diverse_start: True
   sync_baseline: True
-  no_valid: False  # for debugging
+  no_valid: True  # for debugging
   no_log: False
   q_track:
     train: True

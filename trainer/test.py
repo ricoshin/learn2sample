@@ -6,7 +6,7 @@ from nn2.environment import Environment
 from nn2.model import Model
 from nn2.sampler2 import Sampler
 from utils import utils
-from utils.helpers import LoopMananger, OptimGetter
+from utils.helpers import LoopManager, OptimGetter
 from utils.result import ResultDict, ResultFrame, ResultList
 
 
